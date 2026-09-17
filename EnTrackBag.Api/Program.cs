@@ -76,7 +76,7 @@ builder.Services.AddAuthorization(options =>
     }
     options.AddPolicy("BagHistory", policy => policy.RequireAuthenticatedUser().RequireAssertion(context =>
         context.User.Claims.Any(c => c.Type == "permission_access" &&
-            new[] { "Dashboard:VIEW", "Dashboard.SLA:VIEW", "BagJourney:VIEW" }.Contains(c.Value))));
+            new[] { "Dashboard:VIEW", "Dashboard.SLA.View:VIEW", "BagJourney:VIEW" }.Contains(c.Value))));
 });
 
 var app = builder.Build();

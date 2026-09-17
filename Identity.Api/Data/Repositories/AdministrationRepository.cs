@@ -12,6 +12,9 @@ public class AdministrationRepository : IAdministrationRepository
         _identityDbContext = identityDbContext;
     }
 
+    public Task<bool> RoleHasSystemAccountAsync(int roleId, CancellationToken ct) =>
+        _identityDbContext.UserRoles.AnyAsync(x => x.RoleId == roleId && x.User.UserName.ToLower() == "admin", ct);
+
     public Task<RoleEntity[]> GetRolesAsync(CancellationToken ct) =>
         _identityDbContext.Roles
             .AsNoTracking()

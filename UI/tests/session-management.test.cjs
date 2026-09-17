@@ -12,6 +12,8 @@ function fixture() {
   let now = 1000000000000;
   const storage = new Map();
   const requests = [], navigations = [], intervals = [], deferred = [], listeners = {};
+  class MonitoringService {}
+  const monitoring={disconnected:new rx.Subject(),openPage:async()=>{},disconnect:async()=>{monitoring.stops++;},stops:0};
   class HttpClient {}
   class Router {}
   class NavigationEnd { constructor(url) { this.urlAfterRedirects = url; } }
@@ -32,10 +34,11 @@ function fixture() {
   const cache = {};
   let auth;
   const mocks = {
-    '@angular/core': { Injectable: () => cls => cls, inject: token => token===HttpClient ? http : token===Router ? router : auth },
+    '@angular/core': { Injectable: () => cls => cls, inject: token => token===HttpClient ? http : token===Router ? router : token===MonitoringService ? monitoring : auth },
     '@angular/common/http': { HttpClient, HttpContext, HttpContextToken },
     '@angular/router': { Router, NavigationEnd },
     'rxjs': rx,
+    './monitoring.service': {MonitoringService},
   };
   function load(file) {
     file = path.resolve(__dirname, '..', file);
@@ -66,9 +69,20 @@ function fixture() {
   function request(url='http://localhost:5100/api/test', bg=false){
     return {url, context:new HttpContext().set(background,bg), clone(options){return {...this,...options};}};
   }
-  return {auth,login,requests,navigations,intervals,deferred,listeners,storage,router,NavigationEnd,
+  return {auth,http,monitoring,login,requests,navigations,intervals,deferred,listeners,storage,router,NavigationEnd,
     advance:ms=>now+=ms, interceptor,request, background};
 }
+
+test('session validation never overlaps and resumes after completion or error',()=>{
+  const f=fixture(); f.login(); let calls=0; let pending=new rx.Subject();
+  f.http.get=()=>{calls++;return pending;};
+  f.monitoring.disconnected.next(); f.monitoring.disconnected.next();
+  assert.equal(calls,1);
+  pending.complete(); pending=new rx.Subject(); f.monitoring.disconnected.next();
+  assert.equal(calls,2);
+  pending.error(new Error('offline')); f.monitoring.disconnected.next();
+  assert.equal(calls,3);
+});
 
 test('login stores a session, logout contacts server and clears token',()=>{
   const f=fixture(); f.login();
@@ -80,7 +94,7 @@ test('login stores a session, logout contacts server and clears token',()=>{
 });
 test('five minutes idle clears token and redirects, polling does not renew',()=>{
   const f=fixture(); f.login(); const before=f.storage.get('last_activity_at');
-  f.advance(299999); f.intervals[1]();
+  f.advance(299999); f.monitoring.disconnected.next();
   assert.equal(f.storage.get('last_activity_at'),before);
   assert.equal(f.auth.getAccessToken(),'token');
   f.advance(1); f.intervals[0]();
@@ -89,23 +103,23 @@ test('five minutes idle clears token and redirects, polling does not renew',()=>
 });
 test('trusted interactions and navigation report activity; synthetic events do not',()=>{
   const f=fixture();f.login();
-  f.listeners.pointerdown({isTrusted:false});assert.equal(f.requests.length,0);
-  f.advance(1000);f.listeners.keydown({isTrusted:true});
+  f.listeners.change({isTrusted:false});assert.equal(f.requests.length,0);
+  f.advance(1000);f.listeners.change({isTrusted:true});
   assert.equal(f.requests.at(-1).url,'http://localhost:5200/api/auth/activity');
   const before=f.requests.length;
   f.router.events.next(new f.NavigationEnd('/dashboard/summary')); // initial boot
   assert.equal(f.requests.length,before);
-  f.advance(1000);f.router.events.next(new f.NavigationEnd('/administration'));
+  f.advance(60000);f.router.events.next(new f.NavigationEnd('/administration'));
   assert.equal(f.requests.length,before+1);
 });
 test('an interaction after timeout cannot revive browser session',()=>{
-  const f=fixture();f.login();f.advance(300000);f.listeners.pointerdown({isTrusted:true});
+  const f=fixture();f.login();f.advance(300000);f.listeners.change({isTrusted:true});
   assert.equal(f.requests.length,0);assert.equal(f.auth.getAccessToken(),null);
 });
-test('foreground API marked, background API never marked as activity',()=>{
+test('neither foreground nor background API traffic counts as activity',()=>{
   const f=fixture();f.login();let sent;
   f.advance(1000);f.interceptor(f.request(), req => {sent=req;return rx.of(null)}).subscribe();
-  assert.equal(sent.setHeaders['X-User-Activity'],'1');
+  assert.equal(sent.setHeaders['X-User-Activity'],undefined);
   const before=f.storage.get('last_activity_at');f.advance(1000);
   f.interceptor(f.request(undefined,true),req=>{sent=req;return rx.of(null)}).subscribe();
   assert.equal(sent.setHeaders['X-User-Activity'],undefined);
@@ -130,4 +144,44 @@ test('JWT is not attached to external URLs and 403 does not log out',()=>{
 test('another tab logging out clears this tab and redirects',()=>{
   const f=fixture();f.login();f.listeners.storage({key:'access_token',newValue:null});
   assert.equal(f.auth.getAccessToken(),null);assert.equal(f.navigations.at(-1),'/login');
+});
+
+test('a newer immediate activity report cancels the old trailing callback',()=>{
+  const f=fixture();f.login();f.auth.recordActivity();
+  f.advance(100);f.auth.recordActivity();
+  f.advance(60000);f.auth.recordActivity();
+  assert.equal(f.requests.length,2);
+  f.deferred.forEach(fn=>fn());
+  assert.equal(f.requests.length,2);
+});
+
+test('slow activity calls cannot overlap; only new input schedules a follow-up',()=>{
+  const f=fixture();f.login();let calls=0;let pending=new rx.Subject();
+  f.http.post=()=>{calls++;return pending;};
+  f.auth.recordActivity();f.advance(60000);f.auth.recordActivity();f.auth.recordActivity();
+  assert.equal(calls,1);
+  const first=pending;pending=new rx.Subject();first.complete();
+  assert.equal(calls,2);pending.complete();
+  assert.equal(calls,2);
+  assert.equal(f.listeners.scroll,undefined);
+});
+
+test('queued activity cannot extend a five-minute idle session',()=>{
+  const f=fixture();f.login();f.auth.recordActivity();f.advance(100);f.auth.recordActivity();
+  f.advance(300000);f.deferred.forEach(fn=>fn());
+  assert.equal(f.auth.getAccessToken(),null);assert.equal(f.requests.length,1);
+  assert.equal(f.navigations.at(-1),'/login');
+});
+
+test('activity reports are limited to once per minute, idle has no heartbeat',()=>{
+  const f=fixture();f.login();f.auth.recordActivity();
+  for(let i=0;i<59;i++){f.advance(1000);f.listeners.input({isTrusted:true});}
+  assert.equal(f.requests.length,1);
+  f.advance(1000);f.deferred.at(-1)();assert.equal(f.requests.length,2);
+  assert.equal(f.requests[1].args[1].headers['X-Activity-Age-Ms'],'1000');
+  const before=f.requests.length;f.advance(60000);f.intervals[0]();assert.equal(f.requests.length,before);
+  assert.equal(f.listeners.scroll,undefined);assert.equal(f.listeners.wheel,undefined);
+  assert.equal(f.listeners.mousemove,undefined);assert.equal(f.listeners.keydown,undefined);
+  f.advance(300000);f.intervals[0]();assert.equal(f.monitoring.stops,1);
+  assert.equal(f.auth.getAccessToken(),null);
 });

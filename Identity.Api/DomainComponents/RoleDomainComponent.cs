@@ -1,6 +1,7 @@
 using Identity.Api.Data.Entities;
 using Identity.Api.Data.Repositories;
 using Identity.Api.DTOs;
+using Identity.Api.Security;
 
 namespace Identity.Api.DomainComponents;
 
@@ -13,8 +14,13 @@ public sealed class RoleDomainComponent : IRoleDomainComponent
         _administrationRepository = administrationRepository;
     }
 
-    public async Task<RoleListItemDto[]> GetRolesAsync(CancellationToken ct) =>
-        (await _administrationRepository.GetRolesAsync(ct)).Select(MapRole).ToArray();
+    public async Task<RoleListItemDto[]> GetRolesAsync(CancellationToken ct)
+    {
+        var result = new List<RoleListItemDto>();
+        foreach (var role in await _administrationRepository.GetRolesAsync(ct))
+            result.Add(MapRole(role, await _administrationRepository.RoleHasSystemAccountAsync(role.Id, ct)));
+        return result.ToArray();
+    }
 
     public async Task<PermissionOptionDto[]> GetPermissionsAsync(CancellationToken ct) =>
         (await _administrationRepository.GetPermissionsAsync(ct))
@@ -35,6 +41,8 @@ public sealed class RoleDomainComponent : IRoleDomainComponent
     {
         var role = await _administrationRepository.GetRoleAsync(roleId, ct);
         if (role is null) return null;
+        if (await _administrationRepository.RoleHasSystemAccountAsync(roleId, ct))
+            throw new ProtectedAccountException("Permissions of a role assigned to the system Administrator cannot be changed.");
 
         var permissions = await _administrationRepository.GetPermissionsAsync(ct);
         var accessTypes = await _administrationRepository.GetAccessTypesAsync(ct);
@@ -84,12 +92,12 @@ public sealed class RoleDomainComponent : IRoleDomainComponent
         return MapRole(role);
     }
 
-    private static RoleListItemDto MapRole(RoleEntity role) => new(
+    private static RoleListItemDto MapRole(RoleEntity role, bool isProtected = false) => new(
         role.Id,
         role.Name,
         role.Description,
         role.IsActive,
         role.RolePermissions
             .Select(x => new PermissionAssignmentDto(x.PermissionId, x.AccessTypeId))
-            .ToArray());
+            .ToArray(), isProtected);
 }

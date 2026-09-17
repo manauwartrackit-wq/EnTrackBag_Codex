@@ -5,6 +5,7 @@ import { Observable } from "rxjs";
 import { environment } from "../../environments/environment";
 
 export interface AdministrationUser {
+  isProtectedSystemAccount: boolean;
   id: number;
   empCode: string | null;
   userName: string;
@@ -30,13 +31,13 @@ export interface AdministrationUser {
 }
 
 export interface RolePermissionAssignment { permissionId: number; accessTypeId: number; }
-export interface AdministrationRole { id: number; name: string; description: string | null; isActive: boolean; permissions: RolePermissionAssignment[]; }
+export interface AdministrationRole { isProtected: boolean; id: number; name: string; description: string | null; isActive: boolean; permissions: RolePermissionAssignment[]; }
 export interface PermissionOption { id: number; code: string; name: string; description: string | null; }
 export interface AccessTypeOption { id: number; code: string; name: string; }
 export interface UserSession { sessionId: number; userId: number; userName: string; displayName: string; loginAt: string; logoutAt: string | null; remoteIp: string | null; userAgent: string | null; tokenExpiresAt: string | null; isActive: boolean; lastActivityAt: string; idleExpiresAt: string; status: string; }
 export interface AuditEvent { id: number; occurredAt: string; userName: string | null; action: string; entityType: string | null; entityId: string | null; description: string | null; success: boolean; correlationId: string | null; }
-export interface SaveUserRequest { empCode: string; userName: string; firstName: string; lastName: string; email: string; passportNumber: string | null; nationality: string; designation: string; isActive: boolean; mustChangePassword: boolean; roleIds: number[]; }
-export interface CreateUserRequest extends Omit<SaveUserRequest, "passportNumber"> { passportNumber: string; temporaryPassword: string; }
+export interface SaveUserRequest { empCode: string; userName: string; firstName: string; lastName: string; email: string; passportNumber: string | null; nationality: string; designation?: string | null; isActive: boolean; mustChangePassword: boolean; roleIds: number[]; }
+export interface CreateUserRequest extends Omit<SaveUserRequest, "passportNumber"> { passportNumber: string; password: string; confirmPassword: string; }
 
 @Injectable({ providedIn: "root" })
 export class AdministrationService {
@@ -52,7 +53,7 @@ export class AdministrationService {
   }
   createUser(request: CreateUserRequest): Observable<AdministrationUser> { return this.http.post<AdministrationUser>(`${this.baseUrl}/users`, request); }
   updateUser(id: number, request: SaveUserRequest): Observable<AdministrationUser> { return this.http.put<AdministrationUser>(`${this.baseUrl}/users/${id}`, request); }
-  resetPassword(id: number, temporaryPassword: string): Observable<void> { return this.http.put<void>(`${this.baseUrl}/users/${id}/reset-password`, { temporaryPassword, mustChangePassword: true }); }
+  resetPassword(id: number, temporaryPassword: string, mustChangePassword = true): Observable<void> { return this.http.put<void>(`${this.baseUrl}/users/${id}/reset-password`, { temporaryPassword, mustChangePassword }); }
   removeUser(id: number): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/users/${id}`); }
   getRoles(): Observable<AdministrationRole[]> { return this.http.get<AdministrationRole[]>(`${this.baseUrl}/roles`); }
   getPermissions(): Observable<PermissionOption[]> { return this.http.get<PermissionOption[]>(`${this.baseUrl}/permissions`); }

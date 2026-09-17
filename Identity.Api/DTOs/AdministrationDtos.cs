@@ -2,6 +2,7 @@ namespace Identity.Api.DTOs;
 
 public class UserListItemDto
 {
+    public bool IsProtectedSystemAccount { get; init; }
     public int Id { get; init; }
     public string? EmpCode { get; init; }
     public string UserName { get; init; } = string.Empty;
@@ -35,10 +36,11 @@ public class CreateUserRequestDto
     public string Email { get; init; } = string.Empty;
     public string PassportNumber { get; init; } = string.Empty;
     public string Nationality { get; init; } = string.Empty;
-    public string Designation { get; init; } = string.Empty;
-    public string TemporaryPassword { get; init; } = string.Empty;
+    public string? Designation { get; init; }
+    public string Password { get; init; } = string.Empty;
+    public string ConfirmPassword { get; init; } = string.Empty;
     public bool IsActive { get; init; } = true;
-    public bool MustChangePassword { get; init; } = true;
+    public bool MustChangePassword { get; init; } = false;
     public int[] RoleIds { get; init; } = [];
 }
 
@@ -51,7 +53,7 @@ public class UpdateUserRequestDto
     public string Email { get; init; } = string.Empty;
     public string? PassportNumber { get; init; }
     public string Nationality { get; init; } = string.Empty;
-    public string Designation { get; init; } = string.Empty;
+    public string? Designation { get; init; }
     public bool IsActive { get; init; }
     public bool MustChangePassword { get; init; }
     public int[] RoleIds { get; init; } = [];
@@ -78,7 +80,7 @@ public sealed record RoleListItemDto(
     string Name,
     string? Description,
     bool IsActive,
-    PermissionAssignmentDto[] Permissions);
+    PermissionAssignmentDto[] Permissions, bool IsProtected = false);
 
 public sealed record PermissionOptionDto(int Id, string Code, string Name, string? Description);
 public sealed record AccessTypeOptionDto(int Id, string Code, string Name);

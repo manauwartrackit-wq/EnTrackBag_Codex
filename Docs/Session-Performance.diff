@@ -1,0 +1,823 @@
+diff --git a/EnTrackBag.Api/Hubs/MonitoringHub.cs b/EnTrackBag.Api/Hubs/MonitoringHub.cs
+index 9f7138f..9befcb6 100644
+--- a/EnTrackBag.Api/Hubs/MonitoringHub.cs
++++ b/EnTrackBag.Api/Hubs/MonitoringHub.cs
+@@ -2,14 +2,26 @@ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.SignalR;
+ using System.Security.Claims;
+ using EnTrackBag.Sessions;
++using EnTrackBag.Api.DomainComponents;
++using System.Text.Json;
+ 
+ namespace EnTrackBag.Api.Hubs;
+ 
+-[Authorize(Policy = "Dashboard")]
++[Authorize]
+ public class MonitoringHub : Hub
+ {
+     private readonly SessionRepository _sessions;
+-    public MonitoringHub(SessionRepository sessions) { _sessions = sessions; }
++    private readonly IServiceScopeFactory _scopes;
++    private readonly IHubContext<MonitoringHub> _hub;
++    public MonitoringHub(SessionRepository sessions, IServiceScopeFactory scopes, IHubContext<MonitoringHub> hub) { _sessions = sessions; _scopes = scopes; _hub = hub; }
++
++    public void SubscribePage(string channel)
++    {
++        if (channel != "" && (channel is not ("Dashboard" or "Dashboard.SLA" or "DeviceStatus") ||
++            !Context.User!.HasClaim("permission_access", channel + ":VIEW")))
++            throw new HubException("Access denied.");
++        Context.Items["channel"] = channel;
++    }
+ 
+     public override async Task OnConnectedAsync()
+     {
+@@ -27,9 +39,53 @@ public class MonitoringHub : Hub
+         try
+         {
+             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
++            var ticks = 0;
++            string? previous = null;
++            string? previousChannel = null;
+             while (await timer.WaitForNextTickAsync(context.ConnectionAborted))
++            {
+                 if (!await _sessions.ValidateAsync(sid, uid, context.ConnectionAborted))
+                 { context.Abort(); return; }
++                // Reuse the session watcher; read only the subscribed page every 15 seconds.
++                if (++ticks % 3 != 0) continue;
++                var channel = context.Items.TryGetValue("channel", out var selected) ? selected as string : "";
++                if (string.IsNullOrEmpty(channel)) continue;
++                try
++                {
++                    using var scope = _scopes.CreateScope();
++                    object payload;
++                    string eventName;
++                    if (channel == "Dashboard")
++                    {
++                        payload = await scope.ServiceProvider.GetRequiredService<IDashboardDomainComponent>().GetKpisAsync(context.ConnectionAborted);
++                        eventName = "DashboardUpdated";
++                    }
++                    else if (channel == "Dashboard.SLA")
++                    {
++                        payload = await scope.ServiceProvider.GetRequiredService<ISlaDomainComponent>().GetSlaAsync(context.ConnectionAborted);
++                        eventName = "SlaUpdated";
++                    }
++                    else
++                    {
++                        var devices = scope.ServiceProvider.GetRequiredService<IDeviceStatusDomainComponent>();
++                        payload = new { summary = await devices.GetSummaryAsync(context.ConnectionAborted),
++                            details = await devices.GetDetailsAsync(null, context.ConnectionAborted) };
++                        eventName = "SystemUpdated";
++                    }
++                    var serialized = JsonSerializer.Serialize(payload);
++                    if (previousChannel == channel && previous == serialized) continue;
++                    previousChannel = channel; previous = serialized;
++                    await _hub.Clients.Client(context.ConnectionId).SendAsync(eventName, payload, context.ConnectionAborted);
++                    if (channel == "Dashboard.SLA")
++                    {
++                        var json = JsonSerializer.SerializeToElement(payload);
++                        var count = json.EnumerateArray().Count(x => x.TryGetProperty("SlaBreach", out var value) && value.GetBoolean());
++                        await _hub.Clients.Client(context.ConnectionId).SendAsync("AlarmUpdated", count, context.ConnectionAborted);
++                    }
++                }
++                catch (OperationCanceledException) when (context.ConnectionAborted.IsCancellationRequested) { return; }
++                catch { /* Operational data failure must not interrupt session validation. */ }
++            }
+         }
+         catch (OperationCanceledException) when (context.ConnectionAborted.IsCancellationRequested) { }
+         catch { context.Abort(); } // Fail closed if session validation is unavailable.
+diff --git a/Shared/SessionRepository.cs b/Shared/SessionRepository.cs
+index 4e74528..3e01bb2 100644
+--- a/Shared/SessionRepository.cs
++++ b/Shared/SessionRepository.cs
+@@ -46,14 +46,14 @@ public sealed class SessionRepository
+         return Convert.ToInt32(await command.ExecuteScalarAsync(ct)) == 1;
+     }
+ 
+-    public async Task<bool> TouchAsync(long sessionId, int userId, CancellationToken ct)
++    public async Task<bool> TouchAsync(long sessionId, int userId, CancellationToken ct, int activityAgeMs = 0)
+     {
+         // Never revive an expired session, even if expiry raced token validation.
+         return await ExecuteAsync("""
+-            UPDATE dbo.UserSessions SET LastActivityAt=SYSUTCDATETIME()
++            UPDATE dbo.UserSessions SET LastActivityAt=CASE WHEN LastActivityAt>DATEADD(millisecond,-@age,SYSUTCDATETIME()) THEN LastActivityAt ELSE DATEADD(millisecond,-@age,SYSUTCDATETIME()) END
+             WHERE SessionId=@sid AND UserId=@uid AND IsActive=1 AND LogoutAt IS NULL
+               AND LastActivityAt>DATEADD(minute,-5,SYSUTCDATETIME()) AND TokenExpiresAt>SYSUTCDATETIME();
+-            """, sessionId, userId, ct) == 1;
++            """, sessionId, userId, ct, Math.Clamp(activityAgeMs, 0, 60000)) == 1;
+     }
+ 
+     public Task LogoutAsync(long sessionId, int userId, CancellationToken ct) => ExecuteAsync("""
+@@ -67,12 +67,13 @@ public sealed class SessionRepository
+             OR TokenExpiresAt IS NULL OR TokenExpiresAt<=SYSUTCDATETIME());
+         """, 0, 0, ct);
+ 
+-    private async Task<int> ExecuteAsync(string sql, long sessionId, int userId, CancellationToken ct)
++    private async Task<int> ExecuteAsync(string sql, long sessionId, int userId, CancellationToken ct, int activityAgeMs = 0)
+     {
+         await using var connection = new SqlConnection(_connectionString);
+         await connection.OpenAsync(ct);
+         await using var command = connection.CreateCommand();
+         command.CommandText = sql;
++        command.Parameters.Add("@age", SqlDbType.Int).Value = activityAgeMs;
+         command.Parameters.Add("@sid", SqlDbType.BigInt).Value = sessionId;
+         command.Parameters.Add("@uid", SqlDbType.Int).Value = userId;
+         return await command.ExecuteNonQueryAsync(ct);
+@@ -100,7 +101,7 @@ public sealed class SessionExpiryWorker : BackgroundService
+     }
+ }
+ 
+-// Only explicitly marked foreground API requests extend a session. Hubs, logout,
++// Only explicit, batched interaction reports extend a session. Ordinary API requests, hubs, logout,
+ // status checks and refresh endpoints cannot extend it, even with the header.
+ public sealed class SessionActivityMiddleware
+ {
+@@ -111,12 +112,12 @@ public sealed class SessionActivityMiddleware
+         var path = context.Request.Path;
+         var foreground = context.Request.Headers["X-User-Activity"] == "1";
+         if (context.User.Identity?.IsAuthenticated == true && foreground &&
+-            path.StartsWithSegments("/api") &&
+-            (!path.StartsWithSegments("/api/auth") || path == "/api/auth/activity"))
++            path == "/api/auth/activity")
+         {
+             var sid = long.Parse(context.User.FindFirstValue("session_id")!);
+             var uid = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? context.User.FindFirstValue("sub")!);
+-            if (!await sessions.TouchAsync(sid, uid, context.RequestAborted))
++            var age = int.TryParse(context.Request.Headers["X-Activity-Age-Ms"], out var elapsed) ? Math.Clamp(elapsed, 0, 60000) : 0;
++            if (!await sessions.TouchAsync(sid, uid, context.RequestAborted, age))
+             {
+                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                 return;
+diff --git a/UI/src/app/app.component.ts b/UI/src/app/app.component.ts
+index 092a550..784aaf1 100644
+--- a/UI/src/app/app.component.ts
++++ b/UI/src/app/app.component.ts
+@@ -23,7 +23,7 @@ export class AppComponent {
+     public notifications: NotificationService,
+     private _router: Router,
+   ) {
+-    if (this.auth.isAuthenticated()) this.notifications.refresh();
++
+   }
+ 
+   public isLoginView(): boolean {
+diff --git a/UI/src/app/app.routes.ts b/UI/src/app/app.routes.ts
+index 3d4db69..0923396 100644
+--- a/UI/src/app/app.routes.ts
++++ b/UI/src/app/app.routes.ts
+@@ -6,50 +6,48 @@ import { DeviceStatusComponent } from "./device-status/device-status.component";
+ import { authGuard } from "./core/auth.guard";
+ import { TagReportComponent } from "./tag-report/tag-report.component";
+ import { BagJourneyComponent } from "./bag-journey/bag-journey.component";
+-import { AdministrationComponent } from "./administration/administration.component";
+-import { BagJourneyConfigurationComponent } from "./bag-journey-configuration/bag-journey-configuration.component";
+ 
+ export const routes: Routes = [
+-  { path: "login", component: LoginComponent },
++  { path: "login", loadComponent: () => import("./login/login.component").then(m => m.LoginComponent) },
+   {
+     path: "dashboard/summary",
+-    component: SummaryComponent,
++    loadComponent: () => import("./dashboard/summary/summary.component").then(m => m.SummaryComponent),
+     canActivate: [authGuard],
+     data: { permission: "Dashboard", accessType: "VIEW" },
+   },
+   {
+     path: "dashboard/sla",
+-    component: SlaComponent,
++    loadComponent: () => import("./dashboard/sla/sla.component").then(m => m.SlaComponent),
+     canActivate: [authGuard],
+     data: { permission: "Dashboard.SLA", accessType: "VIEW" },
+   },
+   {
+     path: "device-status",
+-    component: DeviceStatusComponent,
++    loadComponent: () => import("./device-status/device-status.component").then(m => m.DeviceStatusComponent),
+     canActivate: [authGuard],
+     data: { permission: "DeviceStatus", accessType: "VIEW" },
+   },
+   {
+     path: "tag-report",
+-    component: TagReportComponent,
++    loadComponent: () => import("./tag-report/tag-report.component").then(m => m.TagReportComponent),
+     canActivate: [authGuard],
+     data: { permission: "TagReport", accessType: "VIEW" },
+   },
+   {
+     path: "bag-journey",
+-    component: BagJourneyComponent,
++    loadComponent: () => import("./bag-journey/bag-journey.component").then(m => m.BagJourneyComponent),
+     canActivate: [authGuard],
+     data: { permission: "BagJourney", accessType: "VIEW" },
+   },
+   {
+     path: "administration",
+-    component: AdministrationComponent,
++    loadComponent: () => import("./administration/administration.component").then(m => m.AdministrationComponent),
+     canActivate: [authGuard],
+     data: { permission: "Administration", accessType: "VIEW" },
+   },
+   {
+     path: "bag-journey-configuration",
+-    component: BagJourneyConfigurationComponent,
++    loadComponent: () => import("./bag-journey-configuration/bag-journey-configuration.component").then(m => m.BagJourneyConfigurationComponent),
+     canActivate: [authGuard],
+     data: { permission: "BagJourney.Configuration", accessType: "VIEW" },
+   },
+diff --git a/UI/src/app/core/api.service.ts b/UI/src/app/core/api.service.ts
+index bace7fa..6a72ef0 100644
+--- a/UI/src/app/core/api.service.ts
++++ b/UI/src/app/core/api.service.ts
+@@ -1,7 +1,7 @@
+ import { Injectable, inject } from "@angular/core";
+ import { HttpClient, HttpContext } from "@angular/common/http";
+ import { BACKGROUND_REQUEST } from "./request-activity";
+-import { Observable } from "rxjs";
++import { Observable, defer, finalize, shareReplay } from "rxjs";
+ import { environment } from "../../environments/environment";
+ 
+ @Injectable({ providedIn: "root" })
+@@ -9,8 +9,19 @@ export class ApiService {
+   private readonly http = inject(HttpClient);
+   private readonly baseUrl = environment.apiUrl;
+ 
++  private readonly pending = new Map<string, Observable<unknown>>();
++
+   get<T>(path: string, background = false): Observable<T> {
+-    return this.http.get<T>(this.toUrl(path), { context: new HttpContext().set(BACKGROUND_REQUEST, background) });
++    const key = (localStorage.getItem("access_token") ?? "") + ":" + this.toUrl(path);
++    return defer(() => {
++      let request = this.pending.get(key);
++      if (!request) {
++        request = this.http.get<T>(this.toUrl(path), { context: new HttpContext().set(BACKGROUND_REQUEST, background) })
++          .pipe(finalize(() => this.pending.delete(key)), shareReplay({ bufferSize: 1, refCount: true }));
++        this.pending.set(key, request);
++      }
++      return request as Observable<T>;
++    });
+   }
+ 
+   post<TResponse, TRequest>(path: string, body: TRequest): Observable<TResponse> {
+diff --git a/UI/src/app/core/auth.interceptor.ts b/UI/src/app/core/auth.interceptor.ts
+index 5b54907..9a07a68 100644
+--- a/UI/src/app/core/auth.interceptor.ts
++++ b/UI/src/app/core/auth.interceptor.ts
+@@ -3,7 +3,6 @@ import { inject } from "@angular/core";
+ import { catchError, throwError } from "rxjs";
+ import { AuthService } from "../services/auth.service";
+ import { environment } from "../../environments/environment";
+-import { BACKGROUND_REQUEST } from "./request-activity";
+ 
+ export const authInterceptor: HttpInterceptorFn = (req, next) => {
+   const trusted = [environment.apiUrl, environment.identityApiUrl]
+@@ -11,11 +10,10 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
+   const token = localStorage.getItem("access_token");
+   if (!trusted || !token || req.url.endsWith("/auth/login")) return next(req);
+   const auth = inject(AuthService);
+-  const foreground = !req.context.get(BACKGROUND_REQUEST) && !req.url.includes("/auth/");
+-  if (foreground) auth.markRequestActivity();
++  auth.markRequestActivity();
+   if (auth.getAccessToken() !== token) return throwError(() => new Error("Session expired"));
+   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+-  if (foreground) headers["X-User-Activity"] = "1";
++
+   return next(req.clone({ setHeaders: headers })).pipe(catchError(error => {
+     // An old request must not clear a newer login.
+     if (error.status === 401 && auth.getAccessToken() === token) auth.clearSession();
+diff --git a/UI/src/app/dashboard/sla/sla.component.ts b/UI/src/app/dashboard/sla/sla.component.ts
+index 626e812..57ee000 100644
+--- a/UI/src/app/dashboard/sla/sla.component.ts
++++ b/UI/src/app/dashboard/sla/sla.component.ts
+@@ -1,5 +1,7 @@
+ import { CommonModule } from '@angular/common';
+-import { Component, OnInit, inject } from '@angular/core';
++import { Component, OnInit, inject, DestroyRef } from '@angular/core';
++import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
++import { MonitoringService } from '../../services/monitoring.service';
+ import { ApiService } from '../../core/api.service';
+ 
+ @Component({
+@@ -11,23 +13,26 @@ import { ApiService } from '../../core/api.service';
+ })
+ export class SlaComponent implements OnInit {
+   private readonly api = inject(ApiService);
++  private readonly destroyRef = inject(DestroyRef);
++  private readonly monitoring = inject(MonitoringService);
+   bags: any[] = [];
+   oldest = '—';
+   breaches = 0;
+   selectedHistory: any = null;
+ 
+   ngOnInit(): void {
+-    this.api.get<any[]>('dashboard/sla').subscribe({
++    this.monitoring.sla.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(value => { this.bags = value ?? []; this.breaches = this.bags.filter(b => b.slaBreach ?? b.breached).length; this.oldest = this.bags.length ? (this.bags[0]?.dwellTime ?? '—') : '—'; });
++    this.api.get<any[]>('dashboard/sla').pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+       next: value => {
+         this.bags = value ?? [];
+-        this.breaches = this.bags.filter(b => b.breached).length;
++        this.breaches = this.bags.filter(b => b.slaBreach ?? b.breached).length;
+         this.oldest = this.bags.length ? (this.bags[0]?.dwellTime ?? '—') : '—';
+       }
+     });
+   }
+ 
+   history(id: string): void {
+-    this.api.get<any>(`dashboard/bags/${encodeURIComponent(id)}/history`).subscribe({
++    this.api.get<any>(`dashboard/bags/${encodeURIComponent(id)}/history`).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+       next: value => this.selectedHistory = value
+     });
+   }
+diff --git a/UI/src/app/dashboard/summary/summary.component.ts b/UI/src/app/dashboard/summary/summary.component.ts
+index 890d109..5ce0c6d 100644
+--- a/UI/src/app/dashboard/summary/summary.component.ts
++++ b/UI/src/app/dashboard/summary/summary.component.ts
+@@ -1,4 +1,6 @@
+-import { Component, OnInit, inject } from '@angular/core';
++import { Component, OnInit, inject, DestroyRef } from '@angular/core';
++import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
++import { MonitoringService } from '../../services/monitoring.service';
+ import { ApiService } from '../../core/api.service';
+ 
+ @Component({
+@@ -9,9 +11,12 @@ import { ApiService } from '../../core/api.service';
+ })
+ export class SummaryComponent implements OnInit {
+   private readonly api = inject(ApiService);
++  private readonly destroyRef = inject(DestroyRef);
++  private readonly monitoring = inject(MonitoringService);
+   kpi: any;
+ 
+   ngOnInit(): void {
+-    this.api.get<any>('dashboard/kpis').subscribe({ next: value => this.kpi = value });
++    this.monitoring.dashboard.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(value => { this.kpi = value; });
++    this.api.get<any>('dashboard/kpis').pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: value => this.kpi = value });
+   }
+ }
+diff --git a/UI/src/app/device-status/device-status.component.ts b/UI/src/app/device-status/device-status.component.ts
+index 7baf416..89fa06f 100644
+--- a/UI/src/app/device-status/device-status.component.ts
++++ b/UI/src/app/device-status/device-status.component.ts
+@@ -1,5 +1,7 @@
+ import { CommonModule } from '@angular/common';
+-import { Component, OnInit, inject } from '@angular/core';
++import { Component, OnInit, inject, DestroyRef } from '@angular/core';
++import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
++import { MonitoringService } from '../services/monitoring.service';
+ import { ApiService } from '../core/api.service';
+ 
+ @Component({
+@@ -11,16 +13,19 @@ import { ApiService } from '../core/api.service';
+ })
+ export class DeviceStatusComponent implements OnInit {
+   private readonly api = inject(ApiService);
++  private readonly destroyRef = inject(DestroyRef);
++  private readonly monitoring = inject(MonitoringService);
+   summary: any;
+   details: any[] = [];
+   selectedCategory = '';
+ 
+-  ngOnInit(): void { this.load(); }
++  ngOnInit(): void {
++    this.monitoring.devices.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(value => { this.summary = value.summary; this.details = (value.details ?? []).filter((item: any) => !this.selectedCategory || item.category === this.selectedCategory); }); this.load(); }
+ 
+   load(category = ''): void {
+     this.selectedCategory = category;
+-    this.api.get<any>('device-status/summary').subscribe({ next: value => this.summary = value });
++    this.api.get<any>('device-status/summary').pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: value => this.summary = value });
+     const query = category ? `?category=${encodeURIComponent(category)}` : '';
+-    this.api.get<any[]>(`device-status/details${query}`).subscribe({ next: value => this.details = value ?? [] });
++    this.api.get<any[]>(`device-status/details${query}`).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: value => this.details = value ?? [] });
+   }
+ }
+diff --git a/UI/src/app/login/login.component.ts b/UI/src/app/login/login.component.ts
+index de3752d..aaf52f2 100644
+--- a/UI/src/app/login/login.component.ts
++++ b/UI/src/app/login/login.component.ts
+@@ -3,7 +3,6 @@ import { Component, inject } from "@angular/core";
+ import { FormsModule } from "@angular/forms";
+ import { Router } from "@angular/router";
+ import { AuthService, LoginRequest } from "../services/auth.service";
+-import { NotificationService } from "../services/notification.service";
+ 
+ @Component({
+   standalone: true,
+@@ -20,7 +19,6 @@ export class LoginComponent {
+ 
+   private readonly authService = inject(AuthService);
+   private readonly router = inject(Router);
+-  private readonly notifications = inject(NotificationService);
+ 
+   login(): void {
+     if (this.isSubmitting) return;
+@@ -36,7 +34,7 @@ export class LoginComponent {
+     this.authService.login(request).subscribe({
+       next: () => {
+         this.isSubmitting = false;
+-        this.notifications.refresh();
++
+         this.router.navigateByUrl("/dashboard/summary");
+       },
+       error: () => {
+diff --git a/UI/src/app/services/auth.service.ts b/UI/src/app/services/auth.service.ts
+index 4fdf4b1..48a4afc 100644
+--- a/UI/src/app/services/auth.service.ts
++++ b/UI/src/app/services/auth.service.ts
+@@ -2,7 +2,8 @@ import { Injectable, inject } from "@angular/core";
+ import { HttpClient, HttpContext } from "@angular/common/http";
+ import { NavigationEnd, Router } from "@angular/router";
+ import { BACKGROUND_REQUEST } from "../core/request-activity";
+-import { Observable, tap } from "rxjs";
++import { Observable, tap, finalize } from "rxjs";
++import { MonitoringService } from "./monitoring.service";
+ import { environment } from "../../environments/environment";
+ 
+ export interface LoginRequest {
+@@ -25,14 +26,19 @@ export class AuthService {
+   private readonly http = inject(HttpClient);
+   private readonly baseUrl = environment.identityApiUrl;
+   private readonly router = inject(Router);
++  private readonly monitoring = inject(MonitoringService);
+   private activityTimer: ReturnType<typeof setTimeout> | undefined;
+   private lastReported = 0;
++  private activityInFlight = false;
++  private activityPending = false;
++  private sessionCheckInFlight = false;
+   private readonly idleMs = 5 * 60 * 1000;
+ 
+   constructor() {
+-    for (const eventName of ["pointerdown", "keydown", "wheel", "touchstart", "scroll"]) {
++    // Scroll events can be generated by code; input events represent user intent.
++    for (const eventName of ["click", "input", "change", "submit"]) {
+       document.addEventListener(eventName, event => {
+-        if (event.isTrusted) this.recordActivity();
++        if (event.isTrusted && (eventName !== "click" || (event.target as Element)?.closest?.("button, a, input, select, textarea, [role=button]"))) this.recordActivity();
+       }, { passive: true, capture: true });
+     }
+     let initialNavigation = true;
+@@ -40,13 +46,14 @@ export class AuthService {
+       if (!(event instanceof NavigationEnd)) return;
+       if (!initialNavigation && event.urlAfterRedirects !== "/login") this.recordActivity();
+       initialNavigation = false;
++      if (this.getAccessToken()) void this.monitoring.openPage(event.urlAfterRedirects);
+     });
+     window.addEventListener("storage", event => {
+       if (event.key === "access_token" && !event.newValue) this.clearSession();
+     });
+     setInterval(() => this.checkIdle(), 1000);
+-    // A status check detects another browser's login but NEVER extends idle time.
+-    setInterval(() => this.checkServerSession(), 15000);
++    // Hub disconnect/reconnect checks and API 401s detect revocation without polling.
++    this.monitoring.disconnected.subscribe(() => this.checkServerSession());
+     // Defer until DI has finished creating this service/interceptor.
+     queueMicrotask(() => this.checkServerSession());
+   }
+@@ -54,28 +61,42 @@ export class AuthService {
+   recordActivity(): void {
+     if (!this.getAccessToken() || this.checkIdle()) return;
+     localStorage.setItem("last_activity_at", String(Date.now()));
++    this.activityPending = true;
++    this.scheduleActivity();
++  }
++
++  private scheduleActivity(): void {
++    if (this.activityInFlight || !this.activityPending) return;
+     // Leading/trailing coalescing retains the final event without scroll floods.
+-    if (Date.now() - this.lastReported >= 1000) this.reportActivity();
++    if (Date.now() - this.lastReported >= 60000) this.reportActivity();
+     else if (!this.activityTimer) this.activityTimer = setTimeout(() => {
+       this.activityTimer = undefined;
+       this.reportActivity();
+-    }, 1000);
++    }, Math.max(0, 60000 - (Date.now() - this.lastReported)));
+   }
+ 
+   private reportActivity(): void {
+-    if (!this.getAccessToken() || this.checkIdle()) return;
++    if (this.activityInFlight || !this.activityPending || !this.getAccessToken() || this.checkIdle()) return;
++    if (this.activityTimer) clearTimeout(this.activityTimer);
++    this.activityTimer = undefined;
++    this.activityPending = false;
++    this.activityInFlight = true;
+     this.lastReported = Date.now();
+     this.http.post<void>(`${this.baseUrl}/auth/activity`, {}, {
+-      headers: { "X-User-Activity": "1" },
++      headers: { "X-User-Activity": "1", "X-Activity-Age-Ms": String(Math.min(60000, Math.max(0, Date.now() - Number(localStorage.getItem("last_activity_at"))))) },
+       context: new HttpContext().set(BACKGROUND_REQUEST, true),
+-    }).subscribe({ error: () => { /* 401 handled centrally; never retry activity. */ } });
++    }).pipe(finalize(() => {
++      this.activityInFlight = false;
++      this.scheduleActivity();
++    })).subscribe({ error: () => { /* 401 handled centrally; never retry activity. */ } });
+   }
+ 
+   private checkServerSession(): void {
+-    if (!this.getAccessToken() || this.checkIdle()) return;
++    if (document.hidden || this.sessionCheckInFlight || !this.getAccessToken() || this.checkIdle()) return;
++    this.sessionCheckInFlight = true;
+     this.http.get(`${this.baseUrl}/auth/session`, {
+       context: new HttpContext().set(BACKGROUND_REQUEST, true),
+-    }).subscribe({ error: () => { /* Failures never renew activity. */ } });
++    }).pipe(finalize(() => this.sessionCheckInFlight = false)).subscribe({ error: () => { /* Failures never renew activity. */ } });
+   }
+ 
+   private checkIdle(): boolean {
+@@ -89,10 +110,7 @@ export class AuthService {
+     return false;
+   }
+ 
+-  markRequestActivity(): void {
+-    if (this.getAccessToken() && !this.checkIdle())
+-      localStorage.setItem("last_activity_at", String(Date.now()));
+-  }
++  markRequestActivity(): void { this.checkIdle(); }
+ 
+   login(request: LoginRequest): Observable<LoginResponse> {
+     return this.http
+@@ -124,6 +142,8 @@ export class AuthService {
+   clearSession(): void {
+     if (this.activityTimer) clearTimeout(this.activityTimer);
+     this.activityTimer = undefined;
++    this.activityPending = false;
++    void this.monitoring.disconnect().catch(() => {});
+     localStorage.removeItem("access_token");
+     localStorage.removeItem("permissions");
+     localStorage.removeItem("user_name");
+diff --git a/UI/src/app/services/notification.service.ts b/UI/src/app/services/notification.service.ts
+index 2a2fe5c..cfb8dad 100644
+--- a/UI/src/app/services/notification.service.ts
++++ b/UI/src/app/services/notification.service.ts
+@@ -1,19 +1,17 @@
+ import { Injectable, inject, signal } from "@angular/core";
+-import { ApiService } from "../core/api.service";
++import { MonitoringService } from "./monitoring.service";
+ import { AuthService } from "./auth.service";
+ 
+ @Injectable({ providedIn: "root" })
+ export class NotificationService {
+-  private readonly api = inject(ApiService);
+   private readonly auth = inject(AuthService);
+   readonly count = signal(0);
+ 
++  constructor() { inject(MonitoringService).alarms.subscribe(value => this.setCount(value)); }
++
+   refresh(): void {
+     if (!this.auth.hasPermission("Dashboard.SLA")) { this.clear(); return; }
+-    this.api.get<{ breached?: boolean }[]>("dashboard/sla", true).subscribe({
+-      next: (bags) => this.setCount((bags ?? []).filter((bag) => bag.breached).length),
+-      error: () => this.clear(),
+-    });
++    // Alarm changes arrive through the monitoring hub; no off-page SLA fetch.
+   }
+ 
+   setCount(value: number): void {
+diff --git a/UI/tests/session-management.test.cjs b/UI/tests/session-management.test.cjs
+index 9abe3b8..d1f58cc 100644
+--- a/UI/tests/session-management.test.cjs
++++ b/UI/tests/session-management.test.cjs
+@@ -12,6 +12,8 @@ function fixture() {
+   let now = 1000000000000;
+   const storage = new Map();
+   const requests = [], navigations = [], intervals = [], deferred = [], listeners = {};
++  class MonitoringService {}
++  const monitoring={disconnected:new rx.Subject(),openPage:async()=>{},disconnect:async()=>{monitoring.stops++;},stops:0};
+   class HttpClient {}
+   class Router {}
+   class NavigationEnd { constructor(url) { this.urlAfterRedirects = url; } }
+@@ -32,10 +34,11 @@ function fixture() {
+   const cache = {};
+   let auth;
+   const mocks = {
+-    '@angular/core': { Injectable: () => cls => cls, inject: token => token===HttpClient ? http : token===Router ? router : auth },
++    '@angular/core': { Injectable: () => cls => cls, inject: token => token===HttpClient ? http : token===Router ? router : token===MonitoringService ? monitoring : auth },
+     '@angular/common/http': { HttpClient, HttpContext, HttpContextToken },
+     '@angular/router': { Router, NavigationEnd },
+     'rxjs': rx,
++    './monitoring.service': {MonitoringService},
+   };
+   function load(file) {
+     file = path.resolve(__dirname, '..', file);
+@@ -66,10 +69,21 @@ function fixture() {
+   function request(url='http://localhost:5100/api/test', bg=false){
+     return {url, context:new HttpContext().set(background,bg), clone(options){return {...this,...options};}};
+   }
+-  return {auth,login,requests,navigations,intervals,deferred,listeners,storage,router,NavigationEnd,
++  return {auth,http,monitoring,login,requests,navigations,intervals,deferred,listeners,storage,router,NavigationEnd,
+     advance:ms=>now+=ms, interceptor,request, background};
+ }
+ 
++test('session validation never overlaps and resumes after completion or error',()=>{
++  const f=fixture(); f.login(); let calls=0; let pending=new rx.Subject();
++  f.http.get=()=>{calls++;return pending;};
++  f.monitoring.disconnected.next(); f.monitoring.disconnected.next();
++  assert.equal(calls,1);
++  pending.complete(); pending=new rx.Subject(); f.monitoring.disconnected.next();
++  assert.equal(calls,2);
++  pending.error(new Error('offline')); f.monitoring.disconnected.next();
++  assert.equal(calls,3);
++});
++
+ test('login stores a session, logout contacts server and clears token',()=>{
+   const f=fixture(); f.login();
+   assert.equal(f.auth.getAccessToken(),'token');
+@@ -80,7 +94,7 @@ test('login stores a session, logout contacts server and clears token',()=>{
+ });
+ test('five minutes idle clears token and redirects, polling does not renew',()=>{
+   const f=fixture(); f.login(); const before=f.storage.get('last_activity_at');
+-  f.advance(299999); f.intervals[1]();
++  f.advance(299999); f.monitoring.disconnected.next();
+   assert.equal(f.storage.get('last_activity_at'),before);
+   assert.equal(f.auth.getAccessToken(),'token');
+   f.advance(1); f.intervals[0]();
+@@ -89,23 +103,23 @@ test('five minutes idle clears token and redirects, polling does not renew',()=>
+ });
+ test('trusted interactions and navigation report activity; synthetic events do not',()=>{
+   const f=fixture();f.login();
+-  f.listeners.pointerdown({isTrusted:false});assert.equal(f.requests.length,0);
+-  f.advance(1000);f.listeners.keydown({isTrusted:true});
++  f.listeners.change({isTrusted:false});assert.equal(f.requests.length,0);
++  f.advance(1000);f.listeners.change({isTrusted:true});
+   assert.equal(f.requests.at(-1).url,'http://localhost:5200/api/auth/activity');
+   const before=f.requests.length;
+   f.router.events.next(new f.NavigationEnd('/dashboard/summary')); // initial boot
+   assert.equal(f.requests.length,before);
+-  f.advance(1000);f.router.events.next(new f.NavigationEnd('/administration'));
++  f.advance(60000);f.router.events.next(new f.NavigationEnd('/administration'));
+   assert.equal(f.requests.length,before+1);
+ });
+ test('an interaction after timeout cannot revive browser session',()=>{
+-  const f=fixture();f.login();f.advance(300000);f.listeners.pointerdown({isTrusted:true});
++  const f=fixture();f.login();f.advance(300000);f.listeners.change({isTrusted:true});
+   assert.equal(f.requests.length,0);assert.equal(f.auth.getAccessToken(),null);
+ });
+-test('foreground API marked, background API never marked as activity',()=>{
++test('neither foreground nor background API traffic counts as activity',()=>{
+   const f=fixture();f.login();let sent;
+   f.advance(1000);f.interceptor(f.request(), req => {sent=req;return rx.of(null)}).subscribe();
+-  assert.equal(sent.setHeaders['X-User-Activity'],'1');
++  assert.equal(sent.setHeaders['X-User-Activity'],undefined);
+   const before=f.storage.get('last_activity_at');f.advance(1000);
+   f.interceptor(f.request(undefined,true),req=>{sent=req;return rx.of(null)}).subscribe();
+   assert.equal(sent.setHeaders['X-User-Activity'],undefined);
+@@ -131,3 +145,43 @@ test('another tab logging out clears this tab and redirects',()=>{
+   const f=fixture();f.login();f.listeners.storage({key:'access_token',newValue:null});
+   assert.equal(f.auth.getAccessToken(),null);assert.equal(f.navigations.at(-1),'/login');
+ });
++
++test('a newer immediate activity report cancels the old trailing callback',()=>{
++  const f=fixture();f.login();f.auth.recordActivity();
++  f.advance(100);f.auth.recordActivity();
++  f.advance(60000);f.auth.recordActivity();
++  assert.equal(f.requests.length,2);
++  f.deferred.forEach(fn=>fn());
++  assert.equal(f.requests.length,2);
++});
++
++test('slow activity calls cannot overlap; only new input schedules a follow-up',()=>{
++  const f=fixture();f.login();let calls=0;let pending=new rx.Subject();
++  f.http.post=()=>{calls++;return pending;};
++  f.auth.recordActivity();f.advance(60000);f.auth.recordActivity();f.auth.recordActivity();
++  assert.equal(calls,1);
++  const first=pending;pending=new rx.Subject();first.complete();
++  assert.equal(calls,2);pending.complete();
++  assert.equal(calls,2);
++  assert.equal(f.listeners.scroll,undefined);
++});
++
++test('queued activity cannot extend a five-minute idle session',()=>{
++  const f=fixture();f.login();f.auth.recordActivity();f.advance(100);f.auth.recordActivity();
++  f.advance(300000);f.deferred.forEach(fn=>fn());
++  assert.equal(f.auth.getAccessToken(),null);assert.equal(f.requests.length,1);
++  assert.equal(f.navigations.at(-1),'/login');
++});
++
++test('activity reports are limited to once per minute, idle has no heartbeat',()=>{
++  const f=fixture();f.login();f.auth.recordActivity();
++  for(let i=0;i<59;i++){f.advance(1000);f.listeners.input({isTrusted:true});}
++  assert.equal(f.requests.length,1);
++  f.advance(1000);f.deferred.at(-1)();assert.equal(f.requests.length,2);
++  assert.equal(f.requests[1].args[1].headers['X-Activity-Age-Ms'],'1000');
++  const before=f.requests.length;f.advance(60000);f.intervals[0]();assert.equal(f.requests.length,before);
++  assert.equal(f.listeners.scroll,undefined);assert.equal(f.listeners.wheel,undefined);
++  assert.equal(f.listeners.mousemove,undefined);assert.equal(f.listeners.keydown,undefined);
++  f.advance(300000);f.intervals[0]();assert.equal(f.monitoring.stops,1);
++  assert.equal(f.auth.getAccessToken(),null);
++});
+
+diff --git a/UI/src/app/services/monitoring.service.ts b/UI/src/app/services/monitoring.service.ts
+new file mode 100644
+--- /dev/null
++++ b/UI/src/app/services/monitoring.service.ts
+@@ -0,0 +1,64 @@
++import { Injectable } from '@angular/core';
++import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr';
++import { Subject } from 'rxjs';
++import { environment } from '../../environments/environment';
++
++@Injectable({ providedIn: 'root' })
++export class MonitoringService {
++  readonly dashboard = new Subject<any>();
++  readonly devices = new Subject<any>();
++  readonly sla = new Subject<any[]>();
++  readonly alarms = new Subject<number>();
++  readonly disconnected = new Subject<void>();
++  private channel = '';
++  private starting?: Promise<void>;
++  private generation = 0;
++  private subscribed?: string;
++  private stopping?: Promise<void>;
++  private readonly connection = new HubConnectionBuilder()
++    .withUrl(environment.monitoringHubUrl, { accessTokenFactory: () => localStorage.getItem('access_token') ?? '' })
++    .withAutomaticReconnect().build();
++
++  constructor() {
++    this.connection.on('DashboardUpdated', value => this.dashboard.next(value));
++    this.connection.on('SystemUpdated', value => this.devices.next(value));
++    this.connection.on('SlaUpdated', value => this.sla.next(value));
++    this.connection.on('AlarmUpdated', value => this.alarms.next(value));
++    this.connection.onreconnecting(() => this.disconnected.next());
++    this.connection.onreconnected(() => { this.subscribed = undefined; void this.subscribePage().catch(() => this.disconnected.next()); });
++    this.connection.onclose(() => this.disconnected.next());
++  }
++
++  async openPage(url: string): Promise<void> {
++    this.channel = url.split('?')[0] === '/dashboard/summary' ? 'Dashboard'
++      : url.split('?')[0] === '/dashboard/sla' ? 'Dashboard.SLA'
++      : url.split('?')[0] === '/device-status' ? 'DeviceStatus' : '';
++    if (!localStorage.getItem('access_token')) return;
++    const generation = this.generation;
++    try {
++      await this.stopping;
++      if (generation !== this.generation || !localStorage.getItem('access_token')) return;
++      if (this.connection.state === HubConnectionState.Disconnected && !this.starting)
++        this.starting = this.connection.start().finally(() => this.starting = undefined);
++      await this.starting;
++      if (generation === this.generation) await this.subscribePage();
++    } catch { this.disconnected.next(); }
++  }
++
++  private async subscribePage(): Promise<void> {
++    if (this.connection.state === HubConnectionState.Connected && localStorage.getItem('access_token') && this.subscribed !== this.channel) {
++      this.subscribed = this.channel;
++      try { await this.connection.invoke('SubscribePage', this.channel); }
++      catch (error) { this.subscribed = undefined; throw error; }
++    }
++  }
++
++  async disconnect(): Promise<void> {
++    this.generation++;
++    this.channel = '';
++    this.alarms.next(0);
++    this.subscribed = undefined;
++    this.stopping = this.connection.stop();
++    await this.stopping;
++  }
++}
+
+diff --git a/UI/tests/monitoring-performance.test.cjs b/UI/tests/monitoring-performance.test.cjs
+new file mode 100644
+--- /dev/null
++++ b/UI/tests/monitoring-performance.test.cjs
+@@ -0,0 +1,44 @@
++const test=require('node:test');
++const assert=require('node:assert/strict');
++const fs=require('node:fs');
++const path=require('node:path');
++const vm=require('node:vm');
++const ts=require('typescript');
++const rx=require('rxjs');
++function load(relative,mocks,storage=new Map([['access_token','token']])){
++  const file=path.join(__dirname,'../src/app',relative);
++  const exports={};
++  const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true}}).outputText;
++  vm.runInNewContext(code,{exports,localStorage:{getItem:key=>storage.get(key)??null},require:name=>mocks[name]??(name==='rxjs'?rx:name.includes('environment')?{environment:{apiUrl:'http://localhost:5100/api',monitoringHubUrl:'http://localhost:5100/hubs/monitoring'}}:{}),console});
++  return exports;
++}
++test('monitoring shares one connection and one handler set, stops on logout',async()=>{
++  let builds=0,starts=0,stops=0;const handlers={};const invocations=[];
++  const connection={state:'Disconnected',on:(event,fn)=>{assert.equal(handlers[event],undefined);handlers[event]=fn;},onclose:()=>{},onreconnecting:()=>{},onreconnected:fn=>connection.reconnected=fn,
++    start:async()=>{starts++;connection.state='Connected';},stop:async()=>{stops++;connection.state='Disconnected';},invoke:async(...args)=>invocations.push(args)};
++  class HubConnectionBuilder{withUrl(){return this;}withAutomaticReconnect(){return this;}build(){builds++;return connection;}}
++  const {MonitoringService}=load('services/monitoring.service.ts',{'@angular/core':{Injectable:()=>x=>x},'@microsoft/signalr':{HubConnectionBuilder,HubConnectionState:{Disconnected:'Disconnected',Connected:'Connected'}}});
++  const service=new MonitoringService();
++  await Promise.all([service.openPage('/dashboard/summary'),service.openPage('/dashboard/summary')]);
++  await service.openPage('/device-status');
++  assert.equal(builds,1);assert.equal(starts,1);assert.equal(Object.keys(handlers).length,4);
++  let payload;service.devices.subscribe(x=>payload=x);handlers.SystemUpdated({summary:1});assert.equal(payload.summary,1);
++  await service.openPage('/administration');assert.equal(invocations.at(-1)[1],'');
++  await service.disconnect();assert.equal(stops,1);
++});
++test('concurrent GET subscriptions share a request, completed data is not stale-cached',()=>{
++  let calls=0;let pending=new rx.Subject();
++  class HttpContext{set(){return this;}}
++  const {ApiService}=load('core/api.service.ts',{'@angular/core':{Injectable:()=>x=>x,inject:()=>({get:()=>{calls++;return pending;}})},'@angular/common/http':{HttpContext}});
++  const api=new ApiService();const a=[],b=[];
++  api.get('dashboard/kpis').subscribe(x=>a.push(x));api.get('dashboard/kpis').subscribe(x=>b.push(x));
++  assert.equal(calls,1);pending.next(42);pending.complete();assert.deepEqual(a,[42]);assert.deepEqual(b,[42]);
++  pending=new rx.Subject();api.get('dashboard/kpis').subscribe();assert.equal(calls,2);
++});
++test('feature routes are lazy and login does not fetch SLA notifications',()=>{
++  const routes=fs.readFileSync(path.join(__dirname,'../src/app/app.routes.ts'),'utf8');
++  assert.equal((routes.match(/loadComponent:/g)||[]).length,8);
++  assert.equal(/component:/.test(routes),false);
++  for(const file of ['login/login.component.ts','app.component.ts'])
++    assert.equal(fs.readFileSync(path.join(__dirname,'../src/app',file),'utf8').includes('notifications.refresh()'),false);
++});

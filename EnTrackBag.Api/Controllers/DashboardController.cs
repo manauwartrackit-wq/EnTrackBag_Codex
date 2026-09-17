@@ -22,7 +22,7 @@ public class DashboardController : ControllerBase
     public async Task<IActionResult> GetKpis(CancellationToken ct) => Ok(await _dashboardDomainComponent.GetKpisAsync(ct));
 
     [HttpGet("sla")]
-    [Authorize(Policy = "Dashboard.SLA")]
+    [Authorize(Policy = EnTrackBag.Authorization.PermissionCodes.DashboardSla)]
     public async Task<IActionResult> GetSla(CancellationToken ct) => Ok(await _slaDomainComponent.GetSlaAsync(ct));
 
     [HttpGet("bags/{bagId}/history")]

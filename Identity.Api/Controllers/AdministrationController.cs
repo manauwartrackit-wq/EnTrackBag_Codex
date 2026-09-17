@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Identity.Api.DomainComponents;
 using Identity.Api.DTOs;
+using Identity.Api.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -48,6 +49,7 @@ public class AdministrationController : ControllerBase
             var created = await _userDomainComponent.CreateUserAsync(request, CurrentUserId(), CurrentUserName(), ct);
             return CreatedAtAction(nameof(GetUsers), new { search = created.UserName }, created);
         }
+        catch (ProtectedAccountException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { message = ex.Message }); }
     }
@@ -61,6 +63,7 @@ public class AdministrationController : ControllerBase
             return await _userDomainComponent.ResetPasswordAsync(id, request, CurrentUserId(), CurrentUserName(), ct)
                 ? NoContent() : NotFound();
         }
+        catch (ProtectedAccountException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
     }
 
@@ -73,6 +76,7 @@ public class AdministrationController : ControllerBase
             var updated = await _userDomainComponent.UpdateUserAsync(id, request, CurrentUserId(), CurrentUserName(), ct);
             return updated is null ? NotFound() : Ok(updated);
         }
+        catch (ProtectedAccountException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { message = ex.Message }); }
     }
@@ -87,6 +91,7 @@ public class AdministrationController : ControllerBase
                 ? NoContent()
                 : NotFound();
         }
+        catch (ProtectedAccountException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { message = ex.Message }); }
     }
 
@@ -117,6 +122,7 @@ public class AdministrationController : ControllerBase
             var updated = await _roleDomainComponent.UpdatePermissionsAsync(id, request, CurrentUserId(), CurrentUserName(), ct);
             return updated is null ? NotFound() : Ok(updated);
         }
+        catch (ProtectedAccountException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
     }
 

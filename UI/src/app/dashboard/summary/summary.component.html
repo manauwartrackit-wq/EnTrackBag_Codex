@@ -5,8 +5,8 @@
       <p>Operational summary and current bag flow.</p>
     </div>
     <div class="view-toggle">
-      <a href="/dashboard/summary" class="selected">Summary</a>
-      <a href="/dashboard/sla">SLA</a>
+      <a routerLink="/dashboard/summary" class="selected">Summary</a>
+      @if (auth.hasAccess('Dashboard.SLA.View', 'VIEW')) { <a routerLink="/dashboard/sla">SLA</a> }
     </div>
   </div>
 

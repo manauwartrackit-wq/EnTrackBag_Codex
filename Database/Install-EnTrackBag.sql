@@ -192,17 +192,18 @@ GO
 
 INSERT INTO dbo.Permissions (Code, Name, Description)
 VALUES
-('Dashboard.View', 'Summary Dashboard', 'Access to Summary Dashboard.'),
-('Dashboard.SLA.View', 'SLA Dashboard', 'Access to SLA Dashboard.'),
-('DeviceStatus.View', 'Device & System Status', 'Access to Device & System Status.'),
+('Dashboard', 'Summary Dashboard', 'Access to Summary Dashboard.'),
+('Dashboard.SLA', 'SLA Dashboard', 'Access to SLA Dashboard.'),
+('DeviceStatus', 'Device & System Status', 'Access to Device & System Status.'),
 ('DeviceStatus.Details', 'Device Details', 'Access to detailed device information.'),
-('TagReport.View', 'Tag Report', 'Access to Tag Report.'),
-('BagJourney.View', 'Bag Journey', 'Access to Bag Journey.'),
-('Administration.View', 'Administration', 'Access to Administration.'),
-('Users.Manage', 'Users', 'User administration capability.'),
-('Roles.Manage', 'Roles', 'Role and permission administration capability.'),
-('Sessions.Manage', 'Sessions', 'View/manage active user sessions.'),
-('AuditLog.View', 'Audit Log', 'View audit events.');
+('TagReport', 'Tag Report', 'Access to Tag Report.'),
+('BagJourney', 'Bag Journey', 'Access to Bag Journey.'),
+('BagJourney.Configuration', 'Bag Journey Configuration', 'Configure journey routing and thresholds.'),
+('Administration', 'Administration', 'Access to Administration.'),
+('Users', 'Users', 'User administration capability.'),
+('Roles', 'Roles', 'Role and permission administration capability.'),
+('Sessions', 'Sessions', 'View/manage active user sessions.'),
+('AuditLog', 'Audit Log', 'View audit events.');
 GO
 
 DECLARE @VIEW INT = (SELECT Id FROM dbo.AccessTypes WHERE Code='VIEW');
@@ -211,24 +212,24 @@ DECLARE @EDIT INT = (SELECT Id FROM dbo.AccessTypes WHERE Code='EDIT');
 DECLARE @DELETE INT = (SELECT Id FROM dbo.AccessTypes WHERE Code='DELETE');
 
 INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
-SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Ground Floor' AND p.Code='Dashboard.View';
+SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Ground Floor' AND p.Code='Dashboard';
 
 INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
-SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Supervisor' AND p.Code IN ('Dashboard.View','Dashboard.SLA.View');
+SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Supervisor' AND p.Code IN ('Dashboard','Dashboard.SLA');
 
 INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
-SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Site Manager' AND p.Code IN ('Dashboard.View','Dashboard.SLA.View','DeviceStatus.View','DeviceStatus.Details','TagReport.View','BagJourney.View');
+SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Site Manager' AND p.Code IN ('Dashboard','Dashboard.SLA','DeviceStatus','DeviceStatus.Details','TagReport','BagJourney');
 
 INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
-SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Admin' AND p.Code IN ('Dashboard.View','Dashboard.SLA.View','DeviceStatus.View','DeviceStatus.Details','TagReport.View','BagJourney.View','Administration.View','Sessions.Manage','AuditLog.View');
-
-INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
-SELECT r.Id,p.Id,a.Id FROM dbo.Roles r CROSS JOIN dbo.Permissions p CROSS JOIN dbo.AccessTypes a
-WHERE r.Name='Admin' AND p.Code='Users.Manage' AND a.Code IN ('VIEW','CREATE','EDIT','DELETE');
+SELECT r.Id,p.Id,@VIEW FROM dbo.Roles r CROSS JOIN dbo.Permissions p WHERE r.Name='Admin' AND p.Code IN ('Dashboard','Dashboard.SLA','DeviceStatus','DeviceStatus.Details','TagReport','BagJourney','Administration','Sessions','AuditLog');
 
 INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
 SELECT r.Id,p.Id,a.Id FROM dbo.Roles r CROSS JOIN dbo.Permissions p CROSS JOIN dbo.AccessTypes a
-WHERE r.Name='Admin' AND p.Code='Roles.Manage' AND a.Code IN ('VIEW','EDIT');
+WHERE r.Name='Admin' AND p.Code='Users' AND a.Code IN ('VIEW','CREATE','EDIT','DELETE');
+
+INSERT INTO dbo.RolePermissions (RoleId, PermissionId, AccessTypeId)
+SELECT r.Id,p.Id,a.Id FROM dbo.Roles r CROSS JOIN dbo.Permissions p CROSS JOIN dbo.AccessTypes a
+WHERE r.Name='Admin' AND p.Code IN ('Roles','BagJourney.Configuration') AND a.Code IN ('VIEW','EDIT');
 GO
 
 PRINT 'EnTrackBag Identity + AccessTypes + Exception tables installed successfully.';

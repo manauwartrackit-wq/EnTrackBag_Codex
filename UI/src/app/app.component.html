@@ -13,7 +13,7 @@
           <div class="menu-header"><span class="nav-icon">⌂</span><strong>Dashboard</strong><span class="chevron">⌃</span></div>
           <div class="submenu">
             @if (auth.hasPermission('Dashboard')) { <a routerLink="/dashboard/summary" routerLinkActive="active"><i></i>Summary</a> }
-            @if (auth.hasPermission('Dashboard.SLA')) { <a routerLink="/dashboard/sla" routerLinkActive="active"><i></i>SLA</a> }
+            @if (auth.hasAccess('Dashboard.SLA.View', 'VIEW')) { <a routerLink="/dashboard/sla" routerLinkActive="active"><i></i>SLA</a> }
           </div>
         </div>
         @if (auth.hasPermission('BagJourney')) { <a routerLink="/bag-journey" routerLinkActive="active" class="menu-link"><span class="nav-icon">⌗</span>Tag / Bag Tracking</a> }

@@ -24,4 +24,16 @@ Role matrix:
 
 After installation, scaffold the tables with EF Core Database-First and verify the generated types against the live database. No migrations, `EnsureCreated()`, or `Database.Migrate()` are used.
 
-The separately supplied `EnTrackBag-Identity-Exception-AccessTypes-Final-INT.sql` matches these application-owned tables and also inserts the initial Admin account. Its seeded password payload uses the confirmed legacy AES layout. Identity.Api accepts that format only as a compatibility bridge and replaces it with ASP.NET Core `PasswordHasher` format immediately after a successful login. New and reset passwords are never reversibly encrypted.
+## Single development deployment entry point
+
+Use `Install-EnTrackBag-New-Tables-And-Admin.sql` for development deployment over an existing BLTSMFT database. Older install/patch files are historical, not additional deployment steps.
+
+For a new database's first system account, run `New-DevelopmentPasswordHash.ps1` with PowerShell 7, enter a new password at its masked prompt, and paste only the emitted PBKDF2-HMAC-SHA512 hash into `@InitialPasswordHash` in the SQL script. No default/reversible password is shipped. A rerun does not require a new hash when admin already exists and never overwrites its password.
+
+The script creates exactly the nine listed application-owned tables using existence checks, reconciles previously deployed identity columns, and seeds one username `admin` / display name `Administrator`. It captures the inserted ID with SCOPE_IDENTITY or selects the existing ID and seeds relationships without duplicates. Existing non-system users and operational data are preserved. Admin receives all existing active permissions/access types; Site Manager includes Bag Journey Configuration VIEW.
+
+The application treats only username `admin` (case-insensitive) as the protected system account. It permits viewing and password changes, rejects profile/role/deactivation/deletion edits, and rejects changes to permissions of its assigned roles. Other users are not protected merely because they have an Admin role or the display name Administrator. Security audit/session history is retained; no ordinary per-user History action is exposed for the protected account.
+
+Passwords use PBKDF2-HMAC-SHA512 with a random 16-byte salt, 210000 iterations and a 32-byte subkey, encoded in the ASP.NET Identity V3 format. Existing SHA512 Identity hashes verify and upgrade when appropriate. Plaintext, AES and legacy SHA256 password verification are removed; incompatible old accounts require an authorized password reset. Passport encryption is independent and unchanged.
+
+The deployment script is saved, not automatically executed. Back up BLTSMFT before manual deployment. No EF migrations or operational seed data are used.

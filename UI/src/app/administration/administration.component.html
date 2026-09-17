@@ -49,9 +49,10 @@
                 <td><span class="status" [class.inactive]="!user.isActive"><i></i>{{ user.isActive ? 'Active' : 'Inactive' }}</span></td>
                 <td>{{ formatDate(user.lastLoginAt) }}</td>
                 <td class="row-actions">
-                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" title="Edit user" (click)="openEditUser(user)">✎</button> }
-                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" title="Reset password" (click)="resetPassword(user)">⌘</button> }
-                  @if (auth.hasAccess('Users', 'DELETE')) { <button class="danger" type="button" title="Remove user" (click)="removeUser(user)">⌫</button> }
+                  @if (user.isProtectedSystemAccount && auth.hasAccess('Users', 'VIEW')) { <button type="button" title="View Administrator" (click)="viewingUser = user">View</button> }
+                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" title="Edit user" [disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" [class.action-disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" (click)="!user.isProtectedSystemAccount && !user.roles.includes('Admin') && openEditUser(user)">✎</button> }
+                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" [title]="user.isProtectedSystemAccount ? 'Change password' : 'Reset password'" (click)="resetPassword(user)">⌘</button> }
+                  @if (auth.hasAccess('Users', 'DELETE')) { <button class="danger" type="button" title="Remove user" [disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" [class.action-disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" (click)="!user.isProtectedSystemAccount && !user.roles.includes('Admin') && removeUser(user)">⌫</button> }
                 </td>
               </tr>
             } @empty { <tr><td colspan="8"><div class="empty-state">No users match your filters.</div></td></tr> }
@@ -72,11 +73,11 @@
         <div class="permission-panel">
           @if (selectedRole) {
             <div class="permission-heading"><div><h2>{{ selectedRole.name }}</h2><p>Choose the allowed access types for each page or capability.</p></div>
-              @if (auth.hasAccess('Roles', 'EDIT')) { <button class="primary-button" type="button" (click)="saveRolePermissions()" [disabled]="saving">{{ saving ? 'Saving…' : 'Save changes' }}</button> }
+              @if (!selectedRole.isProtected && auth.hasAccess('Roles', 'EDIT')) { <button class="primary-button" type="button" (click)="saveRolePermissions()" [disabled]="saving">{{ saving ? 'Saving…' : 'Save changes' }}</button> }
             </div>
             <div class="permission-table-wrap"><table class="permission-table"><thead><tr><th>Permission</th>@for (access of accessTypes; track access.id) { <th>{{ access.name }}</th> }</tr></thead>
               <tbody>@for (permission of permissions; track permission.id) { <tr><td><strong>{{ permission.name }}</strong><small>{{ permission.code }}</small></td>
-                @for (access of accessTypes; track access.id) { <td><input type="checkbox" [checked]="hasRolePermission(permission.id, access.id)" (change)="toggleRolePermission(permission.id, access.id, $any($event.target).checked)" [disabled]="!auth.hasAccess('Roles', 'EDIT')"></td> }
+                @for (access of accessTypes; track access.id) { <td><input type="checkbox" [checked]="hasRolePermission(permission.id, access.id)" (change)="toggleRolePermission(permission.id, access.id, $any($event.target).checked)" [disabled]="selectedRole.isProtected || !auth.hasAccess('Roles', 'EDIT')"></td> }
               </tr> }</tbody></table></div>
           }
         </div>
@@ -99,22 +100,44 @@
 
 @if (userDialogOpen) {
   <div class="dialog-backdrop" (click)="closeUserDialog()">
-    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title" (click)="$event.stopPropagation()">
+    <form #userDetailsForm="ngForm" appPasswordMatch (ngSubmit)="saveUser(userDetailsForm)" class="dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title" (click)="$event.stopPropagation()">
       <div class="dialog-heading"><div><span class="eyebrow">User account</span><h2 id="user-dialog-title">{{ editingUser ? 'Edit user' : 'Add user' }}</h2></div><button type="button" (click)="closeUserDialog()" aria-label="Close">×</button></div>
       <div class="dialog-body">
-        <label>Employee code<input [(ngModel)]="userForm.empCode" placeholder="e.g. EMP-001"></label>
-        <label>User name<input [(ngModel)]="userForm.userName" placeholder="e.g. a.alnuaimi"></label>
-        <label>First name<input [(ngModel)]="userForm.firstName" placeholder="First name"></label>
-        <label>Last name<input [(ngModel)]="userForm.lastName" placeholder="Last name"></label>
-        <label>Email<input type="email" [(ngModel)]="userForm.email" placeholder="name@example.com"></label>
-        <label>Passport number<input [(ngModel)]="userForm.passportNumber" [placeholder]="editingUser?.passportMasked ? 'Current: ' + editingUser?.passportMasked + ' — leave blank to keep' : 'Passport number'"></label>
-        <label>Nationality<input [(ngModel)]="userForm.nationality" placeholder="e.g. UAE"></label>
-        <label>Designation<input [(ngModel)]="userForm.designation" placeholder="Employee job title"></label>
-        @if (!editingUser) { <label>Temporary password<input type="password" [(ngModel)]="userForm.password" placeholder="Minimum 8 characters"></label> }
+        @if (errorMessage) { <div class="notice error" role="alert">{{ errorMessage }}</div> }
+        <label>Employee code<input name="empCode" [(ngModel)]="userForm.empCode" placeholder="e.g. EMP-001"></label>
+        <label><span>User name <span class="required-marker">*</span></span><input required name="userName" [(ngModel)]="userForm.userName" placeholder="e.g. a.alnuaimi"></label>
+        <label><span>First name <span class="required-marker">*</span></span><input required name="firstName" [(ngModel)]="userForm.firstName" placeholder="First name"></label>
+        <label><span>Last name <span class="required-marker">*</span></span><input required name="lastName" [(ngModel)]="userForm.lastName" placeholder="Last name"></label>
+        <label><span>Email <span class="required-marker">*</span></span><input #emailControl="ngModel" required email type="email" name="email" [(ngModel)]="userForm.email" placeholder="name@example.com" aria-describedby="email-error">
+          @if (emailControl.touched || emailControl.dirty || userDetailsForm.submitted) {
+            @if (emailControl.hasError('required')) { <small id="email-error" class="required-marker" role="alert">Email is required.</small> }
+            @else if (emailControl.hasError('email')) { <small id="email-error" class="required-marker" role="alert">Enter a valid email address.</small> }
+          }
+        </label>
+        <label>Passport number<input name="passportNumber" [(ngModel)]="userForm.passportNumber" [placeholder]="editingUser?.passportMasked ? 'Current: ' + editingUser?.passportMasked + ' — leave blank to keep' : 'Passport number'"></label>
+        <label>Nationality<input name="nationality" [(ngModel)]="userForm.nationality" placeholder="e.g. UAE"></label>
+        <label>Designation<input name="designation" [(ngModel)]="userForm.designation" placeholder="Employee job title"></label>
+        @if (!editingUser) { <label><span>Password <span class="required-marker">*</span></span><input required minlength="8" autocomplete="new-password" type="password" name="password" [(ngModel)]="userForm.password" placeholder="Minimum 8 characters"></label><label><span>Confirm password <span class="required-marker">*</span></span><input #confirmation="ngModel" required minlength="8" autocomplete="new-password" type="password" name="confirmPassword" [(ngModel)]="userForm.confirmPassword" placeholder="Repeat password" aria-describedby="password-match-error">@if (confirmation.hasError('required') && (confirmation.touched || userDetailsForm.submitted)) { <small id="password-match-error" class="required-marker" role="alert">Confirm password is required.</small> } @else if (confirmation.value && userDetailsForm.hasError('passwordMismatch')) { <small id="password-match-error" class="required-marker" role="alert">Passwords do not match.</small> }</label> }
         <fieldset><legend>Assigned roles</legend><div class="role-options">@for (role of roles; track role.id) { <label><input type="checkbox" [checked]="roleSelected(role.id)" (change)="toggleUserRole(role.id, $any($event.target).checked)"><span><strong>{{ role.name }}</strong><small>{{ role.description }}</small></span></label> }</div></fieldset>
-        <div class="switch-row"><label><input type="checkbox" [(ngModel)]="userForm.isActive"><span>Active account</span></label><label><input type="checkbox" [(ngModel)]="userForm.mustChangePassword"><span>Require password change</span></label></div>
+        <div class="switch-row"><label><input type="checkbox" name="isActive" [(ngModel)]="userForm.isActive"><span>Active account</span></label></div>
       </div>
-      <div class="dialog-actions"><button class="secondary-button" type="button" (click)="closeUserDialog()">Cancel</button><button class="primary-button" type="button" (click)="saveUser()" [disabled]="saving">{{ saving ? 'Saving…' : (editingUser ? 'Save user' : 'Create user') }}</button></div>
+      <div class="dialog-actions"><button class="secondary-button" type="button" (click)="closeUserDialog()">Cancel</button><button class="primary-button" type="submit" [disabled]="saving || !userDetailsForm.valid">{{ saving ? 'Saving…' : (editingUser ? 'Save user' : 'Create user') }}</button></div>
+    </form>
+  </div>
+}
+@if (viewingUser) {
+  <div class="dialog-backdrop" (click)="viewingUser = null">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="view-user-title" (click)="$event.stopPropagation()">
+      <div class="dialog-heading"><h2 id="view-user-title">View Administrator</h2><button type="button" aria-label="Close" (click)="viewingUser = null">×</button></div>
+      <div class="dialog-body">
+        <label>User name<input [value]="viewingUser.userName" readonly></label>
+        <label>Name<input [value]="viewingUser.displayName" readonly></label>
+        <label>Email<input [value]="viewingUser.email ?? ''" readonly></label>
+        <label>Designation<input [value]="viewingUser.designation ?? ''" readonly></label>
+        <label>Roles<input [value]="viewingUser.roles.join(', ')" readonly></label>
+        <label>Status<input [value]="viewingUser.isActive ? 'Active' : 'Inactive'" readonly></label>
+      </div>
+      <div class="dialog-actions"><button class="secondary-button" type="button" (click)="viewingUser = null">Close</button></div>
     </section>
   </div>
 }

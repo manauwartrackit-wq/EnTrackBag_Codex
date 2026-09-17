@@ -17,7 +17,6 @@ public class IdentityDomainComponent : IIdentityDomainComponent
     private readonly string _jwtIssuer;
     private readonly string _jwtAudience;
     private readonly IPasswordHasher<UserEntity> _passwordHasher;
-    private readonly string? _legacyEncryptionKey;
 
     // MANDATORY REQUIREMENT: Standard constructor injection layout only (No primary constructors)
     public IdentityDomainComponent(IIdentityRepository identityRepository, IConfiguration configuration, IPasswordHasher<UserEntity> passwordHasher)
@@ -29,7 +28,6 @@ public class IdentityDomainComponent : IIdentityDomainComponent
         _jwtIssuer = configuration["Jwt:Issuer"] ?? string.Empty;
         _jwtAudience = configuration["Jwt:Audience"] ?? string.Empty;
         _passwordHasher = passwordHasher;
-        _legacyEncryptionKey = configuration["Security:EncryptionKey"];
     }
 
     public async Task<LoginResponseDto?> LoginAsync(LoginRequestDto request, string? ip, string? userAgent, string? machineName, CancellationToken ct)
@@ -41,10 +39,7 @@ public class IdentityDomainComponent : IIdentityDomainComponent
             return null;
 
         var verification = VerifyPasswordHash(user, request.Password);
-        var legacyPasswordAccepted = verification == PasswordVerificationResult.Failed &&
-            (VerifyLegacySha256(user.PasswordHash, request.Password) ||
-             VerifyLegacyAes(user.PasswordHash, request.Password, _legacyEncryptionKey));
-        if (verification == PasswordVerificationResult.Failed && !legacyPasswordAccepted)
+        if (verification == PasswordVerificationResult.Failed)
         {
             user.FailedLoginCount++;
             user.UpdatedAt = DateTime.UtcNow;
@@ -52,7 +47,7 @@ public class IdentityDomainComponent : IIdentityDomainComponent
             return null;
         }
 
-        if (legacyPasswordAccepted || verification == PasswordVerificationResult.SuccessRehashNeeded)
+        if (verification == PasswordVerificationResult.SuccessRehashNeeded)
             user.PasswordHash = _passwordHasher.HashPassword(user, request.Password);
 
         var roles = user.UserRoles.Select(x => x.Role.Name).ToArray();
@@ -140,15 +135,6 @@ public class IdentityDomainComponent : IIdentityDomainComponent
         );
     }
 
-    private static bool VerifyLegacySha256(string storedHash, string password)
-    {
-        var normalized = storedHash.Trim();
-        if (normalized.Length != 64 || normalized.Any(x => !Uri.IsHexDigit(x))) return false;
-        var expected = Convert.FromHexString(normalized);
-        var actual = SHA256.HashData(Encoding.UTF8.GetBytes(password));
-        return CryptographicOperations.FixedTimeEquals(expected, actual);
-    }
-
     private PasswordVerificationResult VerifyPasswordHash(UserEntity user, string password)
     {
         try
@@ -161,26 +147,4 @@ public class IdentityDomainComponent : IIdentityDomainComponent
         }
     }
 
-    private static bool VerifyLegacyAes(string storedValue, string password, string? encryptionKey)
-    {
-        if (string.IsNullOrWhiteSpace(storedValue) || string.IsNullOrWhiteSpace(encryptionKey)) return false;
-        try
-        {
-            var payload = Convert.FromBase64String(storedValue.Trim());
-            if (payload.Length <= 16) return false;
-
-            using var aes = Aes.Create();
-            aes.Key = SHA256.HashData(Encoding.UTF8.GetBytes(encryptionKey));
-            aes.IV = payload[..16];
-            using var decryptor = aes.CreateDecryptor();
-            var clearBytes = decryptor.TransformFinalBlock(payload, 16, payload.Length - 16);
-            var suppliedBytes = Encoding.UTF8.GetBytes(password);
-            return clearBytes.Length == suppliedBytes.Length &&
-                   CryptographicOperations.FixedTimeEquals(clearBytes, suppliedBytes);
-        }
-        catch (Exception ex) when (ex is FormatException or CryptographicException)
-        {
-            return false;
-        }
-    }
 }

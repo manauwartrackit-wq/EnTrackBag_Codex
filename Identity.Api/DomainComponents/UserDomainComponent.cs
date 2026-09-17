@@ -43,10 +43,12 @@ public class UserDomainComponent : IUserDomainComponent
         CancellationToken ct)
     {
         var values = ValidateProfile(request.EmpCode, request.UserName, request.FirstName, request.LastName, request.Email);
+        if (SystemAccount.IsReservedName(values.UserName)) throw new ProtectedAccountException("The admin user name is reserved for the system account.");
         var employment = ValidateEmployment(request.Nationality, request.Designation);
-        var passportNumber = NormalizePassport(request.PassportNumber, true)!;
-        if (request.TemporaryPassword.Length < 8)
+        var passportNumber = NormalizePassport(request.PassportNumber, false);
+        if (string.IsNullOrEmpty(request.Password) || request.Password.Length < 8)
             throw new ArgumentException("Password must be at least 8 characters.");
+        if (request.Password != request.ConfirmPassword) throw new ArgumentException("Passwords do not match.");
         await EnsureUniqueAsync(values.EmpCode, values.UserName, values.Email, null, ct);
 
         var roles = await _userRepository.GetRolesAsync(ct);
@@ -59,12 +61,12 @@ public class UserDomainComponent : IUserDomainComponent
         {
             EmpCode = values.EmpCode, UserName = values.UserName, FirstName = values.FirstName,
             LastName = values.LastName, DisplayName = values.DisplayName, Email = values.Email,
-            PassportNumberEncrypted = _passportProtector.Protect(passportNumber), PassportLast4 = passportNumber[^4..],
+            PassportNumberEncrypted = passportNumber is null ? null : _passportProtector.Protect(passportNumber), PassportLast4 = passportNumber is null ? null : passportNumber[^4..],
             Nationality = employment.Nationality, Designation = employment.Designation,
-            IsActive = request.IsActive, MustChangePassword = request.MustChangePassword,
+            IsActive = request.IsActive, MustChangePassword = false,
             CreatedAt = now, CreatedBy = actorUserId, FailedLoginCount = 0
         };
-        user.PasswordHash = _passwordHasher.HashPassword(user, request.TemporaryPassword);
+        user.PasswordHash = _passwordHasher.HashPassword(user, request.Password);
         foreach (var roleId in selectedRoleIds)
             user.UserRoles.Add(new UserRoleEntity { RoleId = roleId, AssignedAt = now, AssignedBy = actorUserId });
 
@@ -83,19 +85,19 @@ public class UserDomainComponent : IUserDomainComponent
     {
         var user = await _userRepository.GetUserAsync(id, ct);
         if (user is null) return null;
+        SystemAccount.RejectModification(user);
         if (id == actorUserId && !request.IsActive)
             throw new InvalidOperationException("You cannot deactivate your own account.");
 
         var values = ValidateProfile(request.EmpCode, request.UserName, request.FirstName, request.LastName, request.Email);
         var employment = ValidateEmployment(request.Nationality, request.Designation);
         var passportNumber = NormalizePassport(request.PassportNumber, false);
-        if (passportNumber is null && user.PassportNumberEncrypted is null)
-            throw new ArgumentException("Passport number is required.");
         await EnsureUniqueAsync(values.EmpCode, values.UserName, values.Email, id, ct);
         var roles = await _userRepository.GetRolesAsync(ct);
         var selectedRoleIds = request.RoleIds.Distinct().ToHashSet();
         if (selectedRoleIds.Except(roles.Select(x => x.Id)).Any())
             throw new ArgumentException("One or more selected roles are invalid.");
+        if (SystemAccount.IsReservedName(values.UserName)) throw new ProtectedAccountException("The admin user name is reserved for the system account.");
         user.EmpCode = values.EmpCode; user.UserName = values.UserName; user.FirstName = values.FirstName;
         user.LastName = values.LastName; user.DisplayName = values.DisplayName; user.Email = values.Email;
         user.Nationality = employment.Nationality; user.Designation = employment.Designation;
@@ -124,7 +126,7 @@ public class UserDomainComponent : IUserDomainComponent
         var user = await _userRepository.GetUserAsync(id, ct);
         if (user is null) return false;
         user.PasswordHash = _passwordHasher.HashPassword(user, request.TemporaryPassword);
-        user.MustChangePassword = request.MustChangePassword;
+        user.MustChangePassword = SystemAccount.IsProtected(user) ? false : request.MustChangePassword;
         user.FailedLoginCount = 0; user.LockedUntil = null; user.UpdatedAt = DateTime.UtcNow; user.UpdatedBy = actorUserId;
         await AddAuditAsync(actorUserId, actorUserName, "UserPasswordReset", user.UserName, ct);
         await _userRepository.SaveChangesAsync(ct);
@@ -143,6 +145,7 @@ public class UserDomainComponent : IUserDomainComponent
         var user = await _userRepository.GetUserAsync(id, ct);
         if (user is null) return false;
 
+        SystemAccount.RejectModification(user);
         var userName = user.UserName;
         if (await _userRepository.UserHasHistoryAsync(id, ct))
         {
@@ -179,7 +182,7 @@ public class UserDomainComponent : IUserDomainComponent
         var roleNames = knownRoles is null
             ? user.UserRoles.Select(x => x.Role.Name).OrderBy(x => x).ToArray()
             : knownRoles.Where(x => roleIds.Contains(x.Id)).Select(x => x.Name).OrderBy(x => x).ToArray();
-        return new UserListItemDto { Id=user.Id, EmpCode=user.EmpCode, UserName=user.UserName, FirstName=user.FirstName,
+        return new UserListItemDto { IsProtectedSystemAccount=SystemAccount.IsProtected(user), Id=user.Id, EmpCode=user.EmpCode, UserName=user.UserName, FirstName=user.FirstName,
             LastName=user.LastName, DisplayName=user.DisplayName ?? user.UserName, Email=user.Email,
             PassportMasked=MaskPassport(user.PassportLast4), Nationality=user.Nationality, Designation=user.Designation, IsActive=user.IsActive,
             MustChangePassword=user.MustChangePassword, LastLoginAt=user.LastLoginAt, LastLogoutAt=user.LastLogoutAt,
@@ -187,26 +190,24 @@ public class UserDomainComponent : IUserDomainComponent
             UpdatedAt=user.UpdatedAt, CreatedBy=user.CreatedBy, UpdatedBy=user.UpdatedBy, RoleIds=roleIds, Roles=roleNames };
     }
 
-    private async Task EnsureUniqueAsync(string empCode, string userName, string email, int? exceptId, CancellationToken ct)
+    private async Task EnsureUniqueAsync(string? empCode, string userName, string email, int? exceptId, CancellationToken ct)
     {
-        if (await _userRepository.EmpCodeExistsAsync(empCode, exceptId, ct)) throw new InvalidOperationException("Employee code already exists.");
+        if (empCode is not null && await _userRepository.EmpCodeExistsAsync(empCode, exceptId, ct)) throw new InvalidOperationException("Employee code already exists.");
         if (await _userRepository.UserNameExistsAsync(userName, exceptId, ct)) throw new InvalidOperationException("User name already exists.");
         if (await _userRepository.EmailExistsAsync(email, exceptId, ct)) throw new InvalidOperationException("Email address already exists.");
     }
 
-    private static (string EmpCode,string UserName,string FirstName,string LastName,string DisplayName,string Email) ValidateProfile(string empCode,string userName,string firstName,string lastName,string email)
+    private static (string? EmpCode,string UserName,string FirstName,string LastName,string DisplayName,string Email) ValidateProfile(string empCode,string userName,string firstName,string lastName,string email)
     {
-        var values=(EmpCode:empCode.Trim(),UserName:userName.Trim(),FirstName:firstName.Trim(),LastName:lastName.Trim(),DisplayName:$"{firstName.Trim()} {lastName.Trim()}".Trim(),Email:email.Trim().ToLowerInvariant());
-        if (string.IsNullOrWhiteSpace(values.EmpCode)||string.IsNullOrWhiteSpace(values.UserName)||string.IsNullOrWhiteSpace(values.FirstName)||string.IsNullOrWhiteSpace(values.LastName)||string.IsNullOrWhiteSpace(values.Email)) throw new ArgumentException("Employee code, user name, first name, last name and email are required.");
+        var values=(EmpCode:string.IsNullOrWhiteSpace(empCode) ? null : empCode.Trim(),UserName:userName.Trim(),FirstName:firstName.Trim(),LastName:lastName.Trim(),DisplayName:$"{firstName.Trim()} {lastName.Trim()}".Trim(),Email:email.Trim().ToLowerInvariant());
+        if (string.IsNullOrWhiteSpace(values.UserName)||string.IsNullOrWhiteSpace(values.FirstName)||string.IsNullOrWhiteSpace(values.LastName)||string.IsNullOrWhiteSpace(values.Email)) throw new ArgumentException("User name, first name, last name and email are required.");
         try { _ = new System.Net.Mail.MailAddress(values.Email); } catch (FormatException) { throw new ArgumentException("Enter a valid email address."); }
         return values;
     }
 
-    private static (string Nationality, string Designation) ValidateEmployment(string nationality, string designation)
+    private static (string Nationality, string? Designation) ValidateEmployment(string nationality, string? designation)
     {
-        var values = (Nationality: nationality.Trim(), Designation: designation.Trim());
-        if (string.IsNullOrWhiteSpace(values.Nationality) || string.IsNullOrWhiteSpace(values.Designation))
-            throw new ArgumentException("Nationality and designation are required.");
+        var values = (Nationality: nationality.Trim(), Designation: string.IsNullOrWhiteSpace(designation) ? null : designation.Trim());
         return values;
     }
 

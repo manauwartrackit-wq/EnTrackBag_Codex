@@ -1,19 +1,17 @@
 import { Injectable, inject, signal } from "@angular/core";
-import { ApiService } from "../core/api.service";
+import { MonitoringService } from "./monitoring.service";
 import { AuthService } from "./auth.service";
 
 @Injectable({ providedIn: "root" })
 export class NotificationService {
-  private readonly api = inject(ApiService);
   private readonly auth = inject(AuthService);
   readonly count = signal(0);
 
+  constructor() { inject(MonitoringService).alarms.subscribe(value => this.setCount(value)); }
+
   refresh(): void {
-    if (!this.auth.hasPermission("Dashboard.SLA")) { this.clear(); return; }
-    this.api.get<{ breached?: boolean }[]>("dashboard/sla", true).subscribe({
-      next: (bags) => this.setCount((bags ?? []).filter((bag) => bag.breached).length),
-      error: () => this.clear(),
-    });
+    if (!this.auth.hasAccess("Dashboard.SLA.View", "VIEW")) { this.clear(); return; }
+    // Alarm changes arrive through the monitoring hub; no off-page SLA fetch.
   }
 
   setCount(value: number): void {

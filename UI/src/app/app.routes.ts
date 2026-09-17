@@ -1,55 +1,47 @@
 import { Routes } from "@angular/router";
-import { LoginComponent } from "./login/login.component";
-import { SummaryComponent } from "./dashboard/summary/summary.component";
-import { SlaComponent } from "./dashboard/sla/sla.component";
-import { DeviceStatusComponent } from "./device-status/device-status.component";
 import { authGuard } from "./core/auth.guard";
-import { TagReportComponent } from "./tag-report/tag-report.component";
-import { BagJourneyComponent } from "./bag-journey/bag-journey.component";
-import { AdministrationComponent } from "./administration/administration.component";
-import { BagJourneyConfigurationComponent } from "./bag-journey-configuration/bag-journey-configuration.component";
 
 export const routes: Routes = [
-  { path: "login", component: LoginComponent },
+  { path: "login", loadComponent: () => import("./login/login.component").then(m => m.LoginComponent) },
   {
     path: "dashboard/summary",
-    component: SummaryComponent,
+    loadComponent: () => import("./dashboard/summary/summary.component").then(m => m.SummaryComponent),
     canActivate: [authGuard],
     data: { permission: "Dashboard", accessType: "VIEW" },
   },
   {
     path: "dashboard/sla",
-    component: SlaComponent,
+    loadComponent: () => import("./dashboard/sla/sla.component").then(m => m.SlaComponent),
     canActivate: [authGuard],
-    data: { permission: "Dashboard.SLA", accessType: "VIEW" },
+    data: { permission: "Dashboard.SLA.View", accessType: "VIEW" },
   },
   {
     path: "device-status",
-    component: DeviceStatusComponent,
+    loadComponent: () => import("./device-status/device-status.component").then(m => m.DeviceStatusComponent),
     canActivate: [authGuard],
     data: { permission: "DeviceStatus", accessType: "VIEW" },
   },
   {
     path: "tag-report",
-    component: TagReportComponent,
+    loadComponent: () => import("./tag-report/tag-report.component").then(m => m.TagReportComponent),
     canActivate: [authGuard],
     data: { permission: "TagReport", accessType: "VIEW" },
   },
   {
     path: "bag-journey",
-    component: BagJourneyComponent,
+    loadComponent: () => import("./bag-journey/bag-journey.component").then(m => m.BagJourneyComponent),
     canActivate: [authGuard],
     data: { permission: "BagJourney", accessType: "VIEW" },
   },
   {
     path: "administration",
-    component: AdministrationComponent,
+    loadComponent: () => import("./administration/administration.component").then(m => m.AdministrationComponent),
     canActivate: [authGuard],
     data: { permission: "Administration", accessType: "VIEW" },
   },
   {
     path: "bag-journey-configuration",
-    component: BagJourneyConfigurationComponent,
+    loadComponent: () => import("./bag-journey-configuration/bag-journey-configuration.component").then(m => m.BagJourneyConfigurationComponent),
     canActivate: [authGuard],
     data: { permission: "BagJourney.Configuration", accessType: "VIEW" },
   },

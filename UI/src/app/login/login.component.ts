@@ -3,7 +3,6 @@ import { Component, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { Router } from "@angular/router";
 import { AuthService, LoginRequest } from "../services/auth.service";
-import { NotificationService } from "../services/notification.service";
 
 @Component({
   standalone: true,
@@ -20,7 +19,6 @@ export class LoginComponent {
 
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
-  private readonly notifications = inject(NotificationService);
 
   login(): void {
     if (this.isSubmitting) return;
@@ -36,7 +34,7 @@ export class LoginComponent {
     this.authService.login(request).subscribe({
       next: () => {
         this.isSubmitting = false;
-        this.notifications.refresh();
+
         this.router.navigateByUrl("/dashboard/summary");
       },
       error: () => {

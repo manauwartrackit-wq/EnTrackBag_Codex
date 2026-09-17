@@ -15,7 +15,7 @@ builder.Services.AddHostedService<EnTrackBag.Sessions.SessionExpiryWorker>();
 builder.Host.UseWindowsService();
 builder.Services.AddDbContext<IdentityDbContext>(o => o.UseSqlServer(builder.Configuration.GetConnectionString("BLTSMFT")));
 
-builder.Services.AddScoped<IPasswordHasher<UserEntity>, PasswordHasher<UserEntity>>();
+builder.Services.AddScoped<IPasswordHasher<UserEntity>, Pbkdf2Sha512PasswordHasher>();
 builder.Services.AddSingleton<IPassportProtector, PassportProtector>();
 builder.Services.AddScoped<IIdentityRepository, IdentityRepository>();
 builder.Services.AddScoped<IIdentityDomainComponent, IdentityDomainComponent>();

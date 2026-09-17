@@ -23,7 +23,7 @@ export class AppComponent {
     public notifications: NotificationService,
     private _router: Router,
   ) {
-    if (this.auth.isAuthenticated()) this.notifications.refresh();
+
   }
 
   public isLoginView(): boolean {
