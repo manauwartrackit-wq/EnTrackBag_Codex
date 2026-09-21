@@ -5,7 +5,8 @@ using System.Security.Claims;
 
 namespace EnTrackBag.Sessions;
 
-// Shared by both APIs: the database, not JWT lifetime or browser state, is authoritative.
+// Shared by both APIs: the database session (LastActivityAt + IsActive) is authoritative.
+// JWT lifetime is a sliding 8-hour window renewed on activity; idle logout is 5 minutes.
 public sealed class SessionRepository
 {
     private readonly string _connectionString;
@@ -48,11 +49,19 @@ public sealed class SessionRepository
 
     public async Task<bool> TouchAsync(long sessionId, int userId, CancellationToken ct, int activityAgeMs = 0)
     {
-        // Never revive an expired session, even if expiry raced token validation.
+        // Sliding session: activity renews LastActivityAt and extends JWT TokenExpiresAt
+        // (8-hour sliding window). Idle cutoff remains 5 minutes of no activity.
+        // Never revive an already-expired or revoked session.
         return await ExecuteAsync("""
-            UPDATE dbo.UserSessions SET LastActivityAt=CASE WHEN LastActivityAt>DATEADD(millisecond,-@age,SYSUTCDATETIME()) THEN LastActivityAt ELSE DATEADD(millisecond,-@age,SYSUTCDATETIME()) END
-            WHERE SessionId=@sid AND UserId=@uid AND IsActive=1 AND LogoutAt IS NULL
-              AND LastActivityAt>DATEADD(minute,-5,SYSUTCDATETIME()) AND TokenExpiresAt>SYSUTCDATETIME();
+            UPDATE dbo.UserSessions
+            SET LastActivityAt = CASE
+                    WHEN LastActivityAt > DATEADD(millisecond, -@age, SYSUTCDATETIME()) THEN LastActivityAt
+                    ELSE DATEADD(millisecond, -@age, SYSUTCDATETIME())
+                END,
+                TokenExpiresAt = DATEADD(hour, 8, SYSUTCDATETIME())
+            WHERE SessionId = @sid AND UserId = @uid AND IsActive = 1 AND LogoutAt IS NULL
+              AND LastActivityAt > DATEADD(minute, -5, SYSUTCDATETIME())
+              AND TokenExpiresAt > SYSUTCDATETIME();
             """, sessionId, userId, ct, Math.Clamp(activityAgeMs, 0, 60000)) == 1;
     }
 

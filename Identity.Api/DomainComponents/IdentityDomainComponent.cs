@@ -53,6 +53,9 @@ public class IdentityDomainComponent : IIdentityDomainComponent
         var roles = user.UserRoles.Select(x => x.Role.Name).ToArray();
         var permissionAccess = await _identityRepository.GetPermissionAccessAsync(user.Id, ct);
         var now = DateTime.UtcNow;
+        // Initial JWT lifetime is 8 hours. While the user remains active, SessionRepository.TouchAsync
+        // slides TokenExpiresAt forward so active users are not forced out by a fixed expiry.
+        // Inactivity of 5 continuous minutes still ends the session regardless of JWT lifetime.
         var expires = now.AddHours(8);
 
         // Stage 1: Add Session and Save changes immediately to acquire the Database-generated SessionId

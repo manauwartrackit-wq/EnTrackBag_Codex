@@ -39,9 +39,9 @@
                 <td>{{ formatDate(user.lastLoginAt) }}</td>
                 <td class="row-actions">
                   @if (user.isProtectedSystemAccount && auth.hasAccess('Users', 'VIEW')) { <button type="button" title="View Administrator" (click)="viewingUser = user">View</button> }
-                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" title="Edit user" [disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" [class.action-disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" (click)="!user.isProtectedSystemAccount && !user.roles.includes('Admin') && openEditUser(user)">✎</button> }
+                  @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" title="Edit user" [disabled]="user.isProtectedSystemAccount" [class.action-disabled]="user.isProtectedSystemAccount" (click)="!user.isProtectedSystemAccount && openEditUser(user)">✎</button> }
                   @if (auth.hasAccess('Users', 'EDIT')) { <button type="button" [title]="user.isProtectedSystemAccount ? 'Change password' : 'Reset password'" (click)="resetPassword(user)">⌘</button> }
-                  @if (auth.hasAccess('Users', 'DELETE')) { <button class="danger" type="button" title="Remove user" [disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" [class.action-disabled]="user.isProtectedSystemAccount || user.roles.includes('Admin')" (click)="!user.isProtectedSystemAccount && !user.roles.includes('Admin') && removeUser(user)">⌫</button> }
+                  @if (auth.hasAccess('Users', 'DELETE')) { <button class="danger" type="button" title="Remove user" [disabled]="user.isProtectedSystemAccount" [class.action-disabled]="user.isProtectedSystemAccount" (click)="!user.isProtectedSystemAccount && removeUser(user)">⌫</button> }
                 </td>
               </tr>
             } @empty { <tr><td colspan="8"><div class="empty-state">No users match your filters.</div></td></tr> }
