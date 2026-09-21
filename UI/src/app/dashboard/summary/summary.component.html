@@ -1,15 +1,4 @@
 <section>
-  <div class="section-heading">
-    <div>
-      <h1>Dashboard</h1>
-      <p>Operational summary and current bag flow.</p>
-    </div>
-    <div class="view-toggle">
-      <a routerLink="/dashboard/summary" class="selected">Summary</a>
-      @if (auth.hasAccess('Dashboard.SLA.View', 'VIEW')) { <a routerLink="/dashboard/sla">SLA</a> }
-    </div>
-  </div>
-
   <div class="cards">
     <article><b>{{ kpi?.bagsTaggedToday ?? '—' }}</b><span>Bags Tagged Today</span></article>
     <article><b>{{ kpi?.processedAtReclaimToday ?? '—' }}</b><span>Processed at Reclaim Today</span></article>

@@ -3,6 +3,7 @@ import { Component, OnInit, OnDestroy, inject } from "@angular/core";
 import { FormsModule, NgForm } from "@angular/forms";
 import { forkJoin, finalize, Subscription } from "rxjs";
 import { AuthService } from "../services/auth.service";
+import { PageHeaderService } from "../core/page-header.service";
 import {
   AccessTypeOption, AdministrationRole, AdministrationService, AdministrationUser,
   AuditEvent, PermissionOption, RolePermissionAssignment, UserSession,
@@ -24,10 +25,12 @@ export class AdministrationComponent implements OnInit, OnDestroy {
   activeSessions = 0;
   private sessionRequest?: Subscription;
   private loadRequest?: Subscription;
+  private headerRefreshSub?: Subscription;
   private sessionsRefreshing = false;
   private destroyed = false;
   private refreshTimer?: ReturnType<typeof setInterval>;
   private readonly administration = inject(AdministrationService);
+  private readonly pageHeader = inject(PageHeaderService);
   readonly auth = inject(AuthService);
   activeTab: AdministrationTab = "users";
   users: AdministrationUser[] = [];
@@ -52,8 +55,15 @@ export class AdministrationComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadAdministration();
     this.refreshTimer = setInterval(() => this.refreshSessions(), 30000);
+    this.headerRefreshSub = this.pageHeader.refreshRequests$.subscribe(() => this.loadAdministration());
   }
-  ngOnDestroy(): void { this.destroyed = true; if (this.refreshTimer) clearInterval(this.refreshTimer); this.sessionRequest?.unsubscribe(); this.loadRequest?.unsubscribe(); }
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.sessionRequest?.unsubscribe();
+    this.loadRequest?.unsubscribe();
+    this.headerRefreshSub?.unsubscribe();
+  }
   private refreshSessions(): void {
     if (this.destroyed || this.loading || this.sessionsRefreshing || document.hidden || !this.auth.isAuthenticated() || !this.auth.hasPermission("Sessions")) return;
     this.sessionsRefreshing = true;
