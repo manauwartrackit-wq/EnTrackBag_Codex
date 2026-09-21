@@ -1,11 +1,4 @@
 <section>
-  <div class="section-heading">
-    <div>
-      <h1>Device &amp; System Status</h1>
-      <p>Current communication and device status from verified operational data.</p>
-    </div>
-  </div>
-
   <div class="cards">
     <button type="button" (click)="load('Tagging Station')"><b>{{ summary?.taggingStations?.total ?? '—' }}</b><span>Total Tagging Stations</span><small>Online {{ summary?.taggingStations?.online ?? '—' }} · Offline {{ summary?.taggingStations?.offline ?? '—' }}</small></button>
     <button type="button" (click)="load('Reader')"><b>{{ summary?.readers?.total ?? '—' }}</b><span>Total Readers</span></button>
