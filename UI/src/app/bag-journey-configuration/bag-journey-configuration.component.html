@@ -16,95 +16,46 @@
     </div>
 
     <div class="journey-diagram">
-      <!-- Row 1: BHS branch -->
-      <div class="cell bhs-pair">
-        <div class="pair-box">
-          <div><input type="number" [(ngModel)]="threshold('return-feed-dog-air').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('return-feed-dog-air').delaySeconds"><span>sec.</span></div>
-        </div>
-      </div>
-      <div class="cell bhs-node">
-        <div class="blue-node"><span>⌘</span><strong>BHS Return<br>Feed</strong></div>
+      <div class="bhs-branch">
+        <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('return-feed-dog-air').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('return-feed-dog-air').delaySeconds"><span>sec.</span></div></div>
+        <div class="branch-line down"></div>
+        <div class="blue-node bhs"><span>⌘</span><strong>BHS Return<br>Feed</strong></div>
       </div>
 
-      <!-- Row 2: main nodes -->
-      <div class="cell node tag">
-        <div class="blue-node"><span>◆</span><strong>Tagging<br>Station</strong></div>
-      </div>
-      <div class="cell node read">
-        <div class="blue-node"><span>⌁</span><strong>Tagging<br>Read Point</strong></div>
-      </div>
-      <div class="cell node air">
-        <div class="blue-node"><span>⌂</span><strong>Dog House<br>Airside</strong></div>
-      </div>
-      <div class="cell node land">
-        <div class="blue-node"><span>⌂</span><strong>Dog House<br>Landside</strong></div>
-      </div>
-      <div class="cell node exit">
-        <div class="pair-box upper">
-          <div><input type="number" [(ngModel)]="threshold('dog-land-exit').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('dog-land-exit').delaySeconds"><span>sec.</span></div>
+      <div class="main-route">
+        <div class="route-stage">
+          <div class="blue-node"><span>◆</span><strong>Tagging<br>Station</strong></div>
+          <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('tag-read-point').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('tag-read-point').delaySeconds"><span>sec.</span></div></div>
         </div>
-        <div class="blue-node"><span>⇥</span><strong>Exit Gate</strong></div>
-      </div>
-      <div class="cell node recheck">
-        <div class="blue-node"><span>✓</span><strong>Recheck<br>Station</strong></div>
-      </div>
-
-      <!-- Row 3: thresholds under main stages -->
-      <div class="cell pair tag-pair">
-        <div class="pair-box">
-          <div><input type="number" [(ngModel)]="threshold('tag-read-point').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('tag-read-point').delaySeconds"><span>sec.</span></div>
+        <div class="route-stage">
+          <div class="blue-node"><span>⌁</span><strong>Tagging<br>Read Point</strong></div>
+          <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('read-point-dog-air').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('read-point-dog-air').delaySeconds"><span>sec.</span></div></div>
         </div>
-      </div>
-      <div class="cell pair read-pair">
-        <div class="pair-box">
-          <div><input type="number" [(ngModel)]="threshold('read-point-dog-air').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('read-point-dog-air').delaySeconds"><span>sec.</span></div>
+        <div class="route-stage">
+          <div class="blue-node"><span>⌂</span><strong>Dog House<br>Airside</strong></div>
+          <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('dog-air-land').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('dog-air-land').delaySeconds"><span>sec.</span></div></div>
         </div>
-      </div>
-      <div class="cell pair air-pair">
-        <div class="pair-box">
-          <div><input type="number" [(ngModel)]="threshold('dog-air-land').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('dog-air-land').delaySeconds"><span>sec.</span></div>
+        <div class="route-stage dog-land">
+          <div class="blue-node"><span>⌂</span><strong>Dog House<br>Landside</strong></div>
         </div>
-      </div>
-      <div class="cell pair land-spacer"></div>
-      <div class="cell pair exit-spacer"></div>
-      <div class="cell pair recheck-pair">
-        <div class="pair-box">
-          <div><input type="number" [(ngModel)]="threshold('exit-recheck').normalSeconds"><span>sec.</span></div>
-          <div><input type="number" [(ngModel)]="threshold('exit-recheck').delaySeconds"><span>sec.</span></div>
+        <div class="route-stage exit-stage">
+          <div class="pair-box upper"><div><input type="number" [(ngModel)]="threshold('dog-land-exit').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('dog-land-exit').delaySeconds"><span>sec.</span></div></div>
+          <div class="blue-node"><span>⇥</span><strong>Exit Gate</strong></div>
+        </div>
+        <div class="route-stage recheck-stage">
+          <div class="blue-node"><span>✓</span><strong>Recheck<br>Station</strong></div>
+          <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('exit-recheck').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('exit-recheck').delaySeconds"><span>sec.</span></div></div>
         </div>
       </div>
 
-      <!-- Row 4–5: Lounge IN / Lounge / OUT -->
-      <div class="cell lounge-in">
-        <span class="flow-label in">IN</span>
-        <div class="pair-box">
-          <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-in-out').normalSeconds"><span>sec.</span></div>
-          <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-in-out').delaySeconds"><span>sec.</span></div>
-        </div>
-        <div class="connector-down" aria-hidden="true"></div>
-      </div>
-      <div class="cell lounge-node">
+      <div class="lounge-branch">
+        <span class="in-label">IN</span><span class="out-label">OUT</span><div class="vertical-line in"></div><div class="vertical-line out"></div>
         <div class="blue-node lounge"><span>▰</span><strong>Lounge</strong></div>
-      </div>
-      <div class="cell lounge-out">
-        <span class="flow-label out">OUT</span>
-        <div class="pair-box">
-          <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div>
-          <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div>
-        </div>
+        <div class="horizontal-line"></div>
+        <div class="pair-box"><div><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div><div><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div></div>
       </div>
 
-      <div class="diagram-footer">
-        <button type="button" (click)="save()" [disabled]="saving || !auth.hasAccess('BagJourney.Configuration', 'EDIT')">
-          <span>▣</span>{{ saving ? 'Updating…' : 'Update Settings' }}
-        </button>
-        <p>* Settings shall apply for bags from the point of Update</p>
-      </div>
+      <div class="diagram-footer"><button type="button" (click)="save()" [disabled]="saving || !auth.hasAccess('BagJourney.Configuration', 'EDIT')"><span>▣</span>{{ saving ? 'Updating…' : 'Update Settings' }}</button><p>* Settings shall apply for bags from the point of Update</p></div>
     </div>
   }
 </section>
