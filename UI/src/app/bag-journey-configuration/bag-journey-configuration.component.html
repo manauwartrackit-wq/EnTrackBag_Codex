@@ -48,14 +48,15 @@
         </div>
       </div>
 
-      <!-- Dog House Landside → Lounge IN / OUT (legacy layout) -->
       <div class="lounge-branch">
         <div class="lounge-loop">
+          <div class="lounge-spine" aria-hidden="true"></div>
+
           <div class="lounge-in-path">
             <span class="flow-label in">IN</span>
             <div class="pair-box in-thresholds">
-              <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div>
-              <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div>
+              <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-in-out').normalSeconds"><span>sec.</span></div>
+              <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-in-out').delaySeconds"><span>sec.</span></div>
             </div>
             <div class="connector-in" aria-hidden="true"></div>
           </div>
