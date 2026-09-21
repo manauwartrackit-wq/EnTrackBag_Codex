@@ -1,15 +1,4 @@
 <section class="administration-page">
-  <div class="page-heading">
-    <div>
-      <span class="eyebrow">Access control</span>
-      <h1>Administration</h1>
-      <p>Manage users, roles, active sessions and system audit activity.</p>
-    </div>
-    <button class="refresh-button" type="button" (click)="loadAdministration()" [disabled]="loading">
-      <span aria-hidden="true">↻</span> Refresh
-    </button>
-  </div>
-
   @if (errorMessage) { <div class="notice error"><span>!</span>{{ errorMessage }}</div> }
   @if (successMessage) { <div class="notice success"><span>✓</span>{{ successMessage }}</div> }
 
@@ -23,7 +12,7 @@
   <div class="admin-card">
     <div class="tabs" role="tablist">
       <button type="button" [class.active]="activeTab === 'users'" (click)="setTab('users')">Users <span>{{ users.length }}</span></button>
-      <button type="button" [class.active]="activeTab === 'roles'" (click)="setTab('roles')">Roles &amp; Permissions</button>
+      <button type="button" [class.active]="activeTab === 'roles'" (click)="setTab('roles')">Roles & Permissions</button>
       <button type="button" [class.active]="activeTab === 'sessions'" (click)="setTab('sessions')">Sessions <span>{{ activeSessions }}</span></button>
       <button type="button" [class.active]="activeTab === 'audit'" (click)="setTab('audit')">Audit Log</button>
     </div>
