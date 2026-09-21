@@ -48,18 +48,29 @@
         </div>
       </div>
 
+      <!-- Dog House Landside → Lounge IN / OUT (legacy layout) -->
       <div class="lounge-branch">
-        <div class="lounge-in-col">
-          <span class="flow-label in">Lounge IN</span>
-          <div class="connector-v in" aria-hidden="true"></div>
-          <div class="blue-node lounge"><span>▰</span><strong>Lounge</strong></div>
-        </div>
-        <div class="lounge-out-col">
-          <span class="flow-label out">OUT</span>
-          <div class="connector-v out" aria-hidden="true"></div>
-          <div class="pair-box out-thresholds">
-            <div><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div>
-            <div><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div>
+        <div class="lounge-loop">
+          <div class="lounge-in-path">
+            <span class="flow-label in">IN</span>
+            <div class="pair-box in-thresholds">
+              <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div>
+              <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div>
+            </div>
+            <div class="connector-in" aria-hidden="true"></div>
+          </div>
+
+          <div class="lounge-row">
+            <div class="blue-node lounge"><span>▰</span><strong>Lounge</strong></div>
+            <div class="pair-box out-thresholds">
+              <div class="t-normal"><input type="number" [(ngModel)]="threshold('lounge-out-exit').normalSeconds"><span>sec.</span></div>
+              <div class="t-delay"><input type="number" [(ngModel)]="threshold('lounge-out-exit').delaySeconds"><span>sec.</span></div>
+            </div>
+          </div>
+
+          <div class="lounge-out-path">
+            <span class="flow-label out">OUT</span>
+            <div class="connector-out" aria-hidden="true"></div>
           </div>
         </div>
       </div>
